@@ -75,3 +75,35 @@ mem_arena_temp arena_temp_begin(mem_arena* arena){
 void arena_temp_end(mem_arena_temp temp){
     arena_pop_to(temp.arena,temp.start_pos);
 }
+
+static __thread mem_arena* _scratch_arenas[2]={NULL,NULL};
+
+mem_arena_temp arena_scratch_get(mem_arena** conflicts, u32 num_conflicts){
+    i32 scratch_index=-1
+    for(i32 i=0; i<2; i++){
+        b32 conflict_found=false;
+        for(u32 j=0; j<num_conflicts; j++){
+            if(_scratch_arenas[i]==conflicts[j]){
+                conflict_found=true;
+                break;
+            }
+        }
+        if(!conflict_found){
+            scratch_index=i;
+            break;
+        }
+    }
+    if(scratch_index==-1){
+        return (mem_arena_temp){ 0};
+    }
+    mem_arena** selected=&_scratch_arenas[scratch_index];
+
+    if(*selected==NULL){
+        *selected=arena_create(MiB(64),MiB(1));
+    }
+    return arena_temp_begin(*selected);
+}
+
+void arena_scratch_release(mem_arena_temp scratch){
+    arena_temp_end(scratch);
+}
