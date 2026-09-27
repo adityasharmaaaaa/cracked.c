@@ -50,3 +50,17 @@ void* arena_push(mem_arena* arena, u64 size, b32 non_zero){
 
     return out;
 }
+
+void arena_pop(mem_arena* arena, u64 size){
+    size=MIN(size,arena->pos-ARENA_BASE_POS);
+    arena->pos-=size;
+}
+
+void arena_pop_to(mem_arena* arena, u64 pos){
+    u64 size=pos<arena->pos?arena->pos-pos:0;
+    arena_pop(arena,size);
+}
+
+void arena_clear(mem_arena* arena){
+    arena_pop_to(arena,ARENA_BASE_POS);
+}
