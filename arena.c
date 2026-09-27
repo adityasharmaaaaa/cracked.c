@@ -15,3 +15,7 @@ mem_arena* arena_create(u64 reserve_size, u64 commit_size){
 
     return arena;
 }
+
+void arena_destroy(mem_arena* arena){
+    plat_mem_release(arena,arena->reserve_size);
+}
