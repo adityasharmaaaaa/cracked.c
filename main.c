@@ -43,3 +43,16 @@ typedef enum{
     MV_FLAG_DESIRED_OUTPUT=(1<<4),
     MV_FLAG_COST=(1<<5)
 } model_var_flags;
+
+typedef enum{
+    MV_OP_NULL=0,
+    MV_OP_CREATE,
+    _MV_OP_UNARY_START,
+    MV_OP_RELU,
+    MV_OP_SOFTMAX,
+    _MV_OP_BINARY_START,
+    MV_OP_ADD,
+    MV_OP_SUB,
+    MV_OP_MATMUL,
+    MV_OP_CROSS_ENTROPY,
+} model_var_op;
