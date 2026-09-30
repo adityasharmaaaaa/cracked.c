@@ -132,3 +132,17 @@ model_var* mv_cross_entropy(
     mem_arena* arena, model_context* model,
     model_var* p, model_var* q, u32 flags
 );
+
+model_program model_prog_create(
+    mem_arena* arena, model_context* model, model_var* out_var
+);
+void model_prog_compute(model_program* prog);
+void model_prog_compute_grads(model_program* prog);
+
+model_context* model_create(mem_arena* arena);
+void model_compile(mem_arena* arena, model_context* model);
+void model_feedforward(model_context* model);
+void model_train(
+    model_context* model,
+    const model_training_desc* training_desc
+);
