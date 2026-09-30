@@ -97,3 +97,38 @@ typedef struct{
     u32 batch_size;
     f32 learning_rate;
 } model_training_desc;
+
+model_var* mv_create(
+    mem_arena* arena, model_context* model,
+    u32 rows, u32 cols, u32 flags
+);
+
+model_var* mv_relu(
+    mem_arena* arena, model_context* model,
+    model_var* input, u32 flags
+);
+
+model_var* mv_softmax(
+    mem_arena* arena, model_context* model,
+    model_var* input, u32 flags
+);
+
+model_var* mv_add(
+    mem_arena* arena, model_context* model,
+    model_var* a, model_var* b, u32 flags
+);
+
+model_var* mv_sub(
+    mem_arena* arena, model_context* model,
+    model_var* a, model_var* b, u32 flags
+);
+
+model_var* mv_matmul(
+    mem_arena* arena, model_context* model,
+    model_var* a, model_var* b, u32 flags
+);
+
+model_var* mv_cross_entropy(
+    mem_arena* arena, model_context* model,
+    model_var* p, model_var* q, u32 flags
+);
