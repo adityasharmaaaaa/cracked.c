@@ -56,3 +56,44 @@ typedef enum{
     MV_OP_MATMUL,
     MV_OP_CROSS_ENTROPY,
 } model_var_op;
+
+#define MODEL_VAR_MAX_INPUTS 2
+#define MV_NUM_INPUTS(op) ((op) < _MV_OP_UNARY_START ? 0 : ((op) < _MV_OP_BINARY_START ? 1 : 2))
+
+typedef struct model_var {
+    u32 index;
+    u32 flags;
+
+    matrix* val;
+    matrix* grad;
+
+    model_var_op op;
+    struct model_var* inputs[MODEL_VAR_MAX_INPUTS];
+} model_var;
+
+typedef struct {
+    model_var** vars;
+    u32 size;
+} model_program;
+
+typedef struct {
+    u32 num_vars;
+    model_var* input;
+    model_var* output;
+    model_var* desired_output;
+    model_var* cost;
+
+    model_program forward_prog;
+    model_program cost_prog;
+} model_context;
+
+typedef struct{
+    matrix* train_images;
+    matrix* train_labels;
+    matrix* test_images;
+    matrix* test_labels;
+
+    u32 epochs;
+    u32 batch_size;
+    f32 learning_rate;
+} model_training_desc;
