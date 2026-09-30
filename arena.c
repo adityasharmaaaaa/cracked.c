@@ -186,3 +186,4 @@ b32 plat_mem_release(void* ptr, u64 size) {
 }
 
 #endif
+
