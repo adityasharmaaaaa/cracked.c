@@ -156,3 +156,37 @@ static void test_out_of_space(void){
     CHECK(arena_push(a,1,false)==NULL);
     arena_destroy(a);
 }
+
+static void test_pop(void){
+    mem_arena* a=arena_create(MiB(1),KiB(64));
+    CHECK(a!=NULL);
+    if(!a){
+        return ;
+    }
+
+    arena_push(a,100,false);
+    u64 pos_after_push=a->pos;
+
+    arena_pop(a,40);
+    CHECK(a->pos == pos_after_push-40);
+
+    arena_pop(a,MiB(1));
+    CHECK(a->pos == ARENA_BASE_POS);
+
+    arena_push(a,500,false);
+    u64 mark=a->pos;
+    arena_push(a,500,false);
+    arena_pop_to(a,mark);
+    CHECK(a->pos == mark);
+
+    arena_pop_to(a,mark+12345);
+    CHECK(a->pos == mark);
+
+    arena_pop_to(a,0);
+    CHECK(a->pos==ARENA_BASE_POS);
+
+    arena_push(a,777,false);
+    arena_clear(a);
+    CHECK(a->pos == ARENA_BASE_POS);
+    arena_destroy(a);
+}
