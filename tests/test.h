@@ -23,3 +23,4 @@ static inline int test_summary(void) {
     printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }
+

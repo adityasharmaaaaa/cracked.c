@@ -252,3 +252,4 @@ b32 plat_mem_release(void* ptr, u64 size) {
 #else
     #error "arena.c: unsupported platform (need _WIN32, __linux__, or __APPLE__)"
 #endif
+
