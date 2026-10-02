@@ -1,2 +1,5 @@
-.vscode
-build
+build/
+.DS_Store
+*.dSYM/
+experiments/*
+!experiments/*.c
