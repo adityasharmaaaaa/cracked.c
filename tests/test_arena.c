@@ -217,6 +217,39 @@ static void test_temp(void){
     CHECK(a->pos==pos_before);
 
     arena_temp_end((mem_arena_temp){ 0 });
-    
+
     arena_destroy(a);
+}
+
+static void test_scratch(void){
+    mem_arena_temp s1=arena_scratch_get(NULL,0);
+    CHECK(s1.arena!=NULL);
+    if(!s1.arena){
+        return;
+    }
+    mem_arena* conflicts[]={s1.arena};
+    mem_arena_temp s2=arena_scratch_get(conflicts,1);
+    CHECK(s2.arena!=NULL);
+    CHECK(s2.arena != s1.arena);
+
+    if(s2.arena){
+        mem_arena* both[]={s1.arena,s2.arena};
+        mem_arena_temp s3=arena_scratch_get(both,2);
+        CHECK(s3.arena==NULL);
+        arena_scratch_release(s3);
+    }
+
+    u64 pos_before=s1.arena->pos;
+    u32* nums=PUSH_ARRAY(s1.arena,u32,1000);
+    CHECK(nums!=NULL);
+    if(nums){
+        nums[0]=1;
+        nums[999]=2;
+        CHECK(nums[0]==1 && nums[999]==2);
+    }
+    CHECK(s1.arena->pos>pos_before);
+    
+    arena_scratch_release(s2);
+    arena_scratch_release(s1);
+    CHECK(s1.arena->pos==pos_before);
 }
