@@ -90,3 +90,43 @@ static void test_zeroing(void){
     CHECK(all_zero);
     arena_destroy(a);
 }
+
+static void test_commit_growth(void){
+    u64 commit_size=MAX(KiB(64),(u64)plat_get_pagesize());
+    mem_arena* a = arena_create(MiB(1),commit_size);
+    CHECK(a!=NULL);
+    if(!a){
+        return ;
+    }
+    u64 initial_commit=a->commit_pos;
+    CHECK(initial_commit==a->commit_size);
+
+    CHECK(arena_push(a,1000,false)!=NULL);
+    CHECK(a->commit_pos==initial_commit);
+
+    u64 size=a->commit_size;
+    u8* p=(u8*)arena_push(a,size,false);
+    CHECK(p!=NULL);
+    printf("    commit_pos: %llu KiB -> %llu KiB (pos = %llu)\n",
+           (unsigned long long)(initial_commit / 1024),
+           (unsigned long long)(a->commit_pos / 1024),
+           (unsigned long long)a->pos);
+    CHECK(a->commit_pos>initial_commit);
+    CHECK(a->commit_pos%a->commit_size==0);
+    CHECK(a->commit_pos>=a->pos);
+
+    if(p){
+        for(u64 i=0; i<size; i++){
+            p[i]=(u8)(i*31+7);
+        }
+        b32 intact=true;
+        for(u64 i=0; i<size; i++){
+            if(p[i]!=(u8)(i*31+7)){
+                intact=false;
+                break;
+            }
+        }
+        CHECK(intact);
+    }
+    arena_destroy(a);
+}
