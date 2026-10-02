@@ -37,3 +37,27 @@ static void test_create(void){
 
     CHECK(arena_create(0,0) == NULL);
 }
+
+static void test_alignment(void){
+    mem_arena* a = arena_create(MiB(1),KiB(64));
+    CHECK(a!=NULL);
+    if(!a){
+        return ;
+    }
+    u64 sizes[]={1,3,7,8,13,100,4095,1};
+    u8* prev_end=NULL;
+    
+    for(u32 i=0; i<ARRAY_LEN(sizes); i++){
+        u8* p = (u8*)arena_push(a,sizes[i],false);
+        CHECK(p!=NULL);
+        if(!p){
+            break;
+        }
+        CHECK(((uintptr_t)p%ARENA_ALIGN)==0);
+        if(prev_end){
+            CHECK(p>=prev_end);
+        }
+        prev_end=p+sizes[i];
+    }
+    arena_destroy(a);
+}
