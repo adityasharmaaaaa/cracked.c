@@ -190,3 +190,33 @@ static void test_pop(void){
     CHECK(a->pos == ARENA_BASE_POS);
     arena_destroy(a);
 }
+
+static void test_temp(void){
+    mem_arena* a = arena_create(MiB(1), KiB(64));
+    CHECK(a!=NULL);
+    if(!a){
+        return ;
+    }
+    arena_push(a,64,false);
+    u64 pos_before=a->pos;
+
+    mem_arena_temp outer=arena_temp_begin(a);
+    CHECK(outer.arena==a);
+    CHECK(outer.start_pos==pos_before);
+
+    arena_push(a,1000,false);
+    arena_push(a,3,false);
+
+    mem_arena_temp inner=arena_temp_begin(a);
+    u64 pos_in_outer=a->pos;
+    arena_push(a,5000,false);
+    arena_temp_end(inner);
+    CHECK(a->pos==pos_in_outer);
+
+    arena_temp_end(outer);
+    CHECK(a->pos==pos_before);
+
+    arena_temp_end((mem_arena_temp){ 0 });
+    
+    arena_destroy(a);
+}
