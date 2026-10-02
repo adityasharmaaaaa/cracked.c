@@ -253,3 +253,18 @@ static void test_scratch(void){
     arena_scratch_release(s1);
     CHECK(s1.arena->pos==pos_before);
 }
+
+int main(void) {
+    printf("page size: %u bytes\n\n", plat_get_pagesize());
+ 
+    RUN_TEST(test_create);
+    RUN_TEST(test_alignment);
+    RUN_TEST(test_zeroing);
+    RUN_TEST(test_commit_growth);
+    RUN_TEST(test_out_of_space);
+    RUN_TEST(test_pop);
+    RUN_TEST(test_temp);
+    RUN_TEST(test_scratch);
+ 
+    return test_summary();
+}
