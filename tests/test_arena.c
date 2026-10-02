@@ -130,3 +130,29 @@ static void test_commit_growth(void){
     }
     arena_destroy(a);
 }
+
+static void test_out_of_space(void){
+    mem_arena* a=arena_create(MiB(1),KiB(64));
+    CHECK(a!=NULL);
+    if(!a){
+        return ;
+    }
+    u64 pos_before=a->pos;
+    CHECK(arena_push(a,MiB(2),false)==NULL);
+    CHECK(a->pos==pos_before);
+
+    CHECK(arena_push(a,~(u64)0,false)==NULL);
+    CHECK(a->pos == pos_before);
+
+    u64 remaining=a->reserve_size-ARENA_BASE_POS;
+    u8* all=(u8*)arena_push(a,remaining,false);
+    CHECK(all!=NULL);
+    CHECK(a->pos==a->reserve_size);
+    CHECK(a->commit_pos==a->reserve_size);
+    if(all){
+        all[0]=-1;
+        all[remaining-1]=2;
+    }
+    CHECK(arena_push(a,1,false)==NULL);
+    arena_destroy(a);
+}
