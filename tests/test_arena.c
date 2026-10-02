@@ -61,3 +61,32 @@ static void test_alignment(void){
     }
     arena_destroy(a);
 }
+
+static void test_zeroing(void){
+    mem_arena* a = arena_create(MiB(1),KiB(64));
+    CHECK(a!=NULL);
+    if(!a){
+        return;
+    }
+    u8* dirty=(u8*)arena_push(a,4096,false);
+    CHECK(dirty!=NULL);
+    memset(dirty,0xFF,4096);
+    arena_pop(a,4096);
+
+    u8* again=(u8*)arena_push(a,4096,true);
+    CHECK(again==dirty);
+    CHECK(again[0]==0xFF && again[4095]==0xFF);
+    arena_pop(a,4096);
+
+    u8* clean=(u8*)arena_push(a,4096,false);
+    CHECK(clean==dirty);
+    b32 all_zero=true;
+    for(u32 i=0; i<4096; i++){
+        if(clean[i]!=0){
+            all_zero=false;
+            break;
+        }
+    }
+    CHECK(all_zero);
+    arena_destroy(a);
+}
