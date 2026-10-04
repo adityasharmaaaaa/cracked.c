@@ -27,7 +27,7 @@ u32 prng_rand(void) {
 }
 
 f32 prng_f32_from_u32(u32 x) {
-    return (f32)x / (f32)UINT32_MAX;
+    return (f32)(x >> 8) * (1.0f / 16777216.0f);
 }
 
 f32 prng_randf_r(prng_state* rng) {
