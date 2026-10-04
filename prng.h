@@ -1,5 +1,6 @@
 // Based on pcg random number generator (https://www.pcg-random.org)
 // Licensed under Apache License 2.0 (NO WARRANTY, etc. see website)
+#pragma once
 
 typedef struct {
     u64 state;
@@ -14,4 +15,6 @@ u32 prng_rand(void);
 
 f32 prng_randf_r(prng_state* rng);
 f32 prng_randf(void);
+
+f32 prng_f32_from_u32(u32 x);
 

@@ -1,10 +1,10 @@
-static prng_state s_prng_state = { 
+static prng_state s_prng_state = {
     0x853c49e6748fea9bULL, 0xda3e39cb94b95bdbULL,
 };
 
 void prng_seed_r(prng_state* rng, u64 initstate, u64 initseq) {
     rng->state = 0U;
-    rng->inc = (initseq << 1u) | 1u;
+    rng->inc = (initseq << 1u) | 1u;   // the increment must be odd
     prng_rand_r(rng);
     rng->state += initstate;
     prng_rand_r(rng);
@@ -26,11 +26,14 @@ u32 prng_rand(void) {
     return prng_rand_r(&s_prng_state);
 }
 
+f32 prng_f32_from_u32(u32 x) {
+    return (f32)x / (f32)UINT32_MAX;
+}
+
 f32 prng_randf_r(prng_state* rng) {
-    return (f32)prng_rand_r(rng) / (f32)UINT32_MAX;
+    return prng_f32_from_u32(prng_rand_r(rng));
 }
 
 f32 prng_randf(void) {
     return prng_randf_r(&s_prng_state);
 }
-
