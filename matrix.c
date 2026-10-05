@@ -24,7 +24,7 @@ matrix* mat_create(mem_arena* arena, u32 rows, u32 cols) {
     mat->data=PUSH_ARRAY(arena,f32,count);
 
     if(mat->data==NULL){
-        arena_pop_to(arena,start_pos)
+        arena_pop_to(arena,start_pos);
         return NULL;
     }
     return mat;
@@ -36,24 +36,37 @@ matrix* mat_load(mem_arena* arena, u32 rows, u32 cols, const char* filename) {
 }
 
 b32 mat_copy(matrix* dst, const matrix* src) {
-    (void)dst; (void)src;
-    return false;
+    if(!mat_same_shape(dst,src)){
+        return false;
+    }
+    memmove(dst->data, src->data, mat_count(src)*sizeof(f32));
+    return true;
 }
 
 void mat_clear(matrix* mat) {
-    (void)mat;
+    memset(mat->data,0,mat_count(mat)*sizeof(f32));
 }
 
 void mat_fill(matrix* mat, f32 x) {
-    (void)mat; (void)x;
+    u64 n=mat_count(mat);
+    for(u64 i=0; i<n; i++){
+        mat->data[i]=x;
+    }
 }
 
 void mat_fill_rand(matrix* mat, f32 lower, f32 upper) {
-    (void)mat; (void)lower; (void)upper;
+    f32 range=upper-lower;
+    u64 n=mat_count(mat);
+    for(u64 i=0; i<n; i++){
+        mat->data[i]=lower*prng_randf()*range;
+    }
 }
 
 void mat_scale(matrix* mat, f32 scale) {
-    (void)mat; (void)scale;
+    u64 n=mat_count(mat);
+    for(u64 i=0; i<n; i++){
+        mat->data[i]*=scale;
+    }
 }
 
 f32 mat_sum(const matrix* mat) {
