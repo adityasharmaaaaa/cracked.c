@@ -1,6 +1,33 @@
+static b32 mat_same_shape(const matrix* a, const matrix* b){
+    return a->rows==b->rows && a->cols==b->cols;
+}
+
+static u64 mat_count(const matrix* mat){
+    return (u64)mat->rows*mat->cols;
+}
+
 matrix* mat_create(mem_arena* arena, u32 rows, u32 cols) {
-    (void)arena; (void)rows; (void)cols;
-    return NULL;
+    if(rows==0 || cols==0){
+        return NULL;
+    }
+    u64 count = (u64)rows*cols;
+    if(count>arena->reserve_size/sizof(f32)){
+        return NULL;
+    }
+    u64 start_pos=arena->pos;
+    matrix* mat=PUSH_STRUCT(arena,matrix);
+    if(mat==NULL){
+        return NULL;
+    }
+    mat->rows=rows;
+    mat->cols=cols;
+    mat->data=PUSH_ARRAY(arena,f32,count);
+
+    if(mat->data==NULL){
+        arena_pop_to(arena,start_pos)
+        return NULL;
+    }
+    return mat;
 }
 
 matrix* mat_load(mem_arena* arena, u32 rows, u32 cols, const char* filename) {
