@@ -70,13 +70,23 @@ void mat_scale(matrix* mat, f32 scale) {
 }
 
 f32 mat_sum(const matrix* mat) {
-    (void)mat;
-    return 0.0f;
+    f64 sum=0.0;
+    u64 n=mat_count(mat);
+    for(u64 i=0; i<n; i++){
+        sum+=mat->data[i];
+    }
+    return (f32)sum;
 }
 
 u64 mat_argmax(const matrix* mat) {
-    (void)mat;
-    return 0;
+    u64 best=0;
+    u64 n=mat_count(mat);
+    for(u64 i=1; i<n; i++){
+        if(mat->data[i]>mat->data[best]){
+            best=i;
+        }
+    }
+    return best;
 }
 
 b32 mat_add(matrix* out, const matrix* a, const matrix* b) {

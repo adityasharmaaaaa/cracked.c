@@ -90,10 +90,7 @@ static void test_create_failures(void) {
  
     arena_destroy(a);
 }
- 
-// ---------------------------------------------------------------------------
-// clear / fill / scale
-// ---------------------------------------------------------------------------
+
 static void test_clear_fill_scale(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -118,6 +115,75 @@ static void test_clear_fill_scale(void) {
     // fill must touch the LAST element too (off-by-one guard).
     mat_fill(m, 7.0f);
     CHECK(m->data[5] == 7.0f);
+ 
+    arena_destroy(a);
+}
+
+// ---------------------------------------------------------------------------
+// sum
+// ---------------------------------------------------------------------------
+static void test_sum(void) {
+    mem_arena* a = arena_create(MiB(16), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+ 
+    matrix* small = mat_create(a, 2, 3);
+    f32 vals[] = { 1, 2, 3, 4, 5, 6 };
+    set(small, vals, 6);
+    CHECK_NEAR(mat_sum(small), 21.0, 1e-6);
+ 
+    f32 mixed[] = { -1, 1, -2, 2, 10, -10 };
+    set(small, mixed, 6);
+    CHECK_NEAR(mat_sum(small), 0.0, 1e-6);
+ 
+    // Precision: 1,000,000 copies of 0.1f. The exact answer is ~100000.
+    matrix* big = mat_create(a, 1000, 1000);
+    mat_fill(big, 0.1f);
+ 
+    f32 naive = 0.0f;                             // what you'd get with an f32 accumulator
+    for (u32 i = 0; i < 1000000; i++) { naive += big->data[i]; }
+    f32 ours = mat_sum(big);
+    printf("    sum of 1e6 x 0.1f: naive f32 accumulator = %.2f, mat_sum (f64 accumulator) = %.2f\n",
+           naive, ours);
+ 
+    CHECK_NEAR(ours, 100000.0, 1.0);
+ 
+    arena_destroy(a);
+}
+ 
+// ---------------------------------------------------------------------------
+// argmax
+// ---------------------------------------------------------------------------
+static void test_argmax(void) {
+    mem_arena* a = arena_create(MiB(1), KiB(64));
+    if (!a) { CHECK(a != NULL); return; }
+    matrix* m = mat_create(a, 1, 5);
+ 
+    f32 mid[] = { 3, 9, 2, 1, 4 };
+    set(m, mid, 5);
+    CHECK(mat_argmax(m) == 1);
+ 
+    f32 first[] = { 9, 1, 2, 3, 4 };
+    set(m, first, 5);
+    CHECK(mat_argmax(m) == 0);
+ 
+    f32 last[] = { 1, 2, 3, 4, 9 };
+    set(m, last, 5);
+    CHECK(mat_argmax(m) == 4);                    // the last element must be examined
+ 
+    f32 tie[] = { 3, 9, 2, 9, 1 };
+    set(m, tie, 5);
+    CHECK(mat_argmax(m) == 1);                    // ties: first maximum wins
+ 
+    f32 negative[] = { -5, -2, -9, -3, -7 };
+    set(m, negative, 5);
+    CHECK(mat_argmax(m) == 1);                    // all-negative: must not "start from 0.0"
+ 
+    // Works on a 2D matrix: the index is FLAT (row-major).
+    matrix* grid = mat_create(a, 2, 3);
+    f32 g[] = { 1, 2, 3,
+                4, 9, 5 };
+    set(grid, g, 6);
+    CHECK(mat_argmax(grid) == 4);                 // row 1, col 1 -> 1 * 3 + 1
  
     arena_destroy(a);
 }
