@@ -12,6 +12,16 @@ static int g_failed = 0;
         }                                                                   \
     } while (0)
  
+#define CHECK_NEAR(a, b, eps)                                               \
+    do {                                                                    \
+        double check_a_ = (a), check_b_ = (b);                              \
+        g_checks++;                                                         \
+        if (!(fabs(check_a_ - check_b_) <= (eps))) {                        \
+            g_failed++;                                                     \
+            printf("    FAIL %s:%d: %s ~= %s (got %g, expected %g)\n",      \
+                   __FILE__, __LINE__, #a, #b, check_a_, check_b_);         \
+        }                                                                   \
+
 #define RUN_TEST(fn)                                                        \
     do {                                                                    \
         int failed_before = g_failed;                                       \
