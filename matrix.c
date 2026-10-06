@@ -7,9 +7,6 @@ static u64 mat_count(const matrix* mat) {
     return (u64)mat->rows * mat->cols;
 }
 
-// ---------------------------------------------------------------------------
-// Creation
-// ---------------------------------------------------------------------------
 
 matrix* mat_create(mem_arena* arena, u32 rows, u32 cols) {
     if (rows == 0 || cols == 0) { return NULL; }
@@ -43,9 +40,6 @@ matrix* mat_load(mem_arena* arena, u32 rows, u32 cols, const char* filename) {
     return NULL;
 }
 
-// ---------------------------------------------------------------------------
-// Basic operations
-// ---------------------------------------------------------------------------
 
 b32 mat_copy(matrix* dst, const matrix* src) {
     if (!mat_same_shape(dst, src)) { return false; }
@@ -126,17 +120,44 @@ b32 mat_sub(matrix* out, const matrix* a, const matrix* b) {
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Stubs (implemented later)
-// ---------------------------------------------------------------------------
 
 b32 mat_mul(
     matrix* out, const matrix* a, const matrix* b,
     b8 zero_out, b8 transpose_a, b8 transpose_b
 ) {
-    (void)out; (void)a; (void)b;
-    (void)zero_out; (void)transpose_a; (void)transpose_b;
-    return false;
+    u32 m = transpose_a?a->cols:a->rows;
+    u32 k = transpose_b?a->rows:a->cols;
+    u32 kb = transpose_b?b->cols:b->rows;
+    u32 n = transpose_b?b->rows:b->cols;
+
+    if(k!=kb){
+        return false;
+    }
+    if(out->rows != m || out->cols != n){
+        return false;
+    }
+    if(mat_overlaps(out,a) || mat_overlaps(out,b)){
+        return false;
+    }
+    if(zero_out){
+        mat_clear(out);
+    }
+
+    u64 a_rs=transpose_a?1:a->cols;
+    u64 a_cs=transpose_a?a->cols:1;
+    u64 b_rs=transpose_b?1:b->cols;
+    u64 b_cs=transpose_b?b->cols:1;
+
+    for(u32 i=0; i<m; i++){
+        for(u32 kk=0; kk<k; kk++){
+            f32 a_ik=a->data[i*a_rs+kk*a_cs];
+            for(u32 j=0; j<n; j++){
+                out->data[(u64)i*n+j]+=a_ik*b->data[kk*b_rs+j*b_cs];
+            }
+        }
+    }
+    
+    return true;
 }
 
 b32 mat_relu(matrix* out, const matrix* in) {

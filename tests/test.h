@@ -21,7 +21,9 @@ static int g_failed = 0;
             printf("    FAIL %s:%d: %s ~= %s (got %g, expected %g)\n",      \
                    __FILE__, __LINE__, #a, #b, check_a_, check_b_);         \
         }                                                                   \
+    } while (0)
 
+    
 #define RUN_TEST(fn)                                                        \
     do {                                                                    \
         int failed_before = g_failed;                                       \

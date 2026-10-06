@@ -332,7 +332,78 @@ static void test_fill_rand(void) {
     arena_destroy(a);
 }
 
-// ---------------------------------------------------------------------------
+static void test_matmul_known(void) {
+    mem_arena* a = arena_create(MiB(1), KiB(64));
+    if (!a) { CHECK(a != NULL); return; }
+ 
+    // The 2x2 example from the Thursday exercise.
+    matrix* A = mat_create(a, 2, 2);
+    matrix* B = mat_create(a, 2, 2);
+    matrix* C = mat_create(a, 2, 2);
+    f32 av[] = { 1, 2, 3, 4 };
+    f32 bv[] = { 5, 6, 7, 8 };
+    set(A, av, 4);
+    set(B, bv, 4);
+ 
+    f32 ab[]   = { 19, 22, 43, 50 };   // A  * B
+    f32 atb[]  = { 26, 30, 38, 44 };   // A^T * B
+    f32 abt[]  = { 17, 23, 39, 53 };   // A  * B^T
+    f32 atbt[] = { 23, 31, 34, 46 };   // A^T * B^T
+ 
+    CHECK(mat_mul(C, A, B, true, false, false));  CHECK(equals(C, ab, 4));
+    CHECK(mat_mul(C, A, B, true, true,  false));  CHECK(equals(C, atb, 4));
+    CHECK(mat_mul(C, A, B, true, false, true));   CHECK(equals(C, abt, 4));
+    CHECK(mat_mul(C, A, B, true, true,  true));   CHECK(equals(C, atbt, 4));
+ 
+    // Identity: A * I = A.
+    matrix* I = mat_create(a, 2, 2);
+    f32 iv[] = { 1, 0, 0, 1 };
+    set(I, iv, 4);
+    CHECK(mat_mul(C, A, I, true, false, false));
+    CHECK(equals(C, av, 4));
+ 
+    // Non-square: (2x3) * (3x2) = (2x2). The classic textbook example.
+    matrix* P = mat_create(a, 2, 3);
+    matrix* Q = mat_create(a, 3, 2);
+    matrix* R = mat_create(a, 2, 2);
+    f32 pv[] = { 1, 2, 3,
+                 4, 5, 6 };
+    f32 qv[] = { 7,  8,
+                 9,  10,
+                 11, 12 };
+    f32 pq[] = { 58, 64, 139, 154 };
+    set(P, pv, 6);
+    set(Q, qv, 6);
+    CHECK(mat_mul(R, P, Q, true, false, false));
+    CHECK(equals(R, pq, 4));
+ 
+    // The same product through the flags: store P^T (3x2) and Q^T (2x3) explicitly
+    // and let transpose_a / transpose_b undo them. All four must give the same answer.
+    matrix* Pt = mat_create(a, 3, 2);
+    matrix* Qt = mat_create(a, 2, 3);
+    f32 ptv[] = { 1, 4,
+                  2, 5,
+                  3, 6 };
+    f32 qtv[] = { 7, 9, 11,
+                  8, 10, 12 };
+    set(Pt, ptv, 6);
+    set(Qt, qtv, 6);
+ 
+    CHECK(mat_mul(R, Pt, Q,  true, true,  false)); CHECK(equals(R, pq, 4));
+    CHECK(mat_mul(R, P,  Qt, true, false, true));  CHECK(equals(R, pq, 4));
+    CHECK(mat_mul(R, Pt, Qt, true, true,  true));  CHECK(equals(R, pq, 4));
+ 
+    // A non-square OUTPUT: (3x2) * (2x3) = (3x3).
+    matrix* big = mat_create(a, 3, 3);
+    CHECK(mat_mul(big, Q, Qt, true, false, false));
+    f32 qqt[] = { 7*7+8*8,   7*9+8*10,   7*11+8*12,
+                  9*7+10*8,  9*9+10*10,  9*11+10*12,
+                  11*7+12*8, 11*9+12*10, 11*11+12*12 };
+    CHECK(equals(big, qqt, 9));
+ 
+    arena_destroy(a);
+}
+
 
 int main(void) {
     RUN_TEST(test_create);
