@@ -55,6 +55,9 @@ b32 mat_sub(matrix* out, const matrix* a, const matrix* b);
 // zero_out = true : out  = op(a) * op(b)
 // zero_out = false: out += op(a) * op(b)   (accumulate: needed when a variable's
 //                                           gradient gets contributions from several ops)
+//
+// Returns false (and writes nothing) if the shapes do not fit, or if out shares ANY memory
+// with a or b: unlike mat_add, an in-place multiply would overwrite inputs it still needs.
 b32 mat_mul(
     matrix* out, const matrix* a, const matrix* b,
     b8 zero_out, b8 transpose_a, b8 transpose_b
@@ -76,3 +79,4 @@ b32 mat_cross_entropy_add_grad(
     matrix* p_grad, matrix* q_grad,
     const matrix* p, const matrix* q, const matrix* grad
 );
+
