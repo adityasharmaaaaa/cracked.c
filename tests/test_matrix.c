@@ -564,6 +564,41 @@ static void test_matmul_shape_errors(void) {
     arena_destroy(a);
 }
 
+static void test_matmul_aliasing(void) {
+    mem_arena* a = arena_create(MiB(1), KiB(64));
+    if (!a) { CHECK(a != NULL); return; }
+ 
+    matrix* A = mat_create(a, 2, 2);
+    matrix* B = mat_create(a, 2, 2);
+    f32 av[] = { 1, 2, 3, 4 };
+    f32 bv[] = { 5, 6, 7, 8 };
+    set(A, av, 4);
+    set(B, bv, 4);
+ 
+    // Same matrix as output and input: rejected, nothing modified.
+    CHECK(!mat_mul(A, A, B, true, false, false));
+    CHECK(equals(A, av, 4));
+    CHECK(!mat_mul(B, A, B, true, false, false));
+    CHECK(equals(B, bv, 4));
+    CHECK(!mat_mul(A, A, A, true, false, false));
+    CHECK(equals(A, av, 4));
+ 
+    // Partial overlap: two DIFFERENT matrix structs whose data ranges overlap.
+    // Checking only "same pointer" would miss this.
+    matrix* backing = mat_create(a, 4, 2);               // 8 floats
+    matrix a_view   = { 2, 2, backing->data };           // floats 0..3
+    matrix out_view = { 2, 2, backing->data + 2 };       // floats 2..5: overlaps a_view
+    CHECK(!mat_mul(&out_view, &a_view, B, true, false, false));
+ 
+    // Disjoint views are fine.
+    matrix out_far = { 2, 2, backing->data + 4 };        // floats 4..7: no overlap with 0..3
+    CHECK(mat_mul(&out_far, &a_view, B, true, false, false));
+ 
+    arena_destroy(a);
+}
+ 
+// ---------------------------------------------------------------------------
+ 
 int main(void) {
     RUN_TEST(test_create);
     RUN_TEST(test_create_failures);
@@ -573,7 +608,11 @@ int main(void) {
     RUN_TEST(test_copy);
     RUN_TEST(test_add_sub);
     RUN_TEST(test_fill_rand);
-
+    RUN_TEST(test_matmul_known);
+    RUN_TEST(test_matmul_vs_reference);
+    RUN_TEST(test_matmul_zero_out);
+    RUN_TEST(test_matmul_shape_errors);
+    RUN_TEST(test_matmul_aliasing);
+ 
     return test_summary();
 }
-

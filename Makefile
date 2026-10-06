@@ -14,7 +14,7 @@ CFLAGS  = -std=gnu11 -Wall -Wextra -Wpedantic -I.
 DEBUG   = -g -O0 -fsanitize=address,undefined -fno-omit-frame-pointer
 RELEASE = -O2
 
-TESTS = test_arena test_prng
+TESTS = test_arena test_prng test_matrix
 
 DEPS = base.h arena.h arena.c prng.h prng.c matrix.h matrix.c tests/test.h
 
