@@ -404,6 +404,75 @@ static void test_matmul_known(void) {
     arena_destroy(a);
 }
 
+static f64 ref_at(const matrix* x, b32 transposed, u32 i, u32 j) {
+    return transposed ? x->data[(u64)j * x->cols + i] : x->data[(u64)i * x->cols + j];
+}
+ 
+// out (m x n) = op(a) * op(b), accumulated in f64, with the i-j-k loop order
+// (deliberately different from the real implementation's i-k-j and its strides).
+static void ref_matmul(f64* out, u32 m, u32 n, u32 k,
+                       const matrix* a, const matrix* b, b32 ta, b32 tb) {
+    for (u32 i = 0; i < m; i++) {
+        for (u32 j = 0; j < n; j++) {
+            f64 acc = 0.0;
+            for (u32 kk = 0; kk < k; kk++) {
+                acc += ref_at(a, ta, i, kk) * ref_at(b, tb, kk, j);
+            }
+            out[(u64)i * n + j] = acc;
+        }
+    }
+}
+ 
+static void test_matmul_vs_reference(void) {
+    mem_arena* arena = arena_create(MiB(16), MiB(1));
+    if (!arena) { CHECK(arena != NULL); return; }
+ 
+    u32 dims[] = { 1, 2, 3, 5, 8, 17, 33 };
+    u32 num_dims = sizeof(dims) / sizeof(dims[0]);
+    f64 worst = 0.0;
+    u32 cases = 0;
+ 
+    prng_seed(2024, 1);
+ 
+    for (u32 mi = 0; mi < num_dims; mi++)
+    for (u32 ki = 0; ki < num_dims; ki++)
+    for (u32 ni = 0; ni < num_dims; ni++)
+    for (u32 flags = 0; flags < 4; flags++) {
+        u32 m = dims[mi], k = dims[ki], n = dims[ni];
+        b32 ta = (flags & 1) != 0;
+        b32 tb = (flags & 2) != 0;
+ 
+        // Temp scope: everything allocated in this iteration is freed at the end.
+        mem_arena_temp scratch = arena_temp_begin(arena);
+ 
+        // Stored shapes depend on the flags (the table from Tuesday's exercise).
+        matrix* a = ta ? mat_create(arena, k, m) : mat_create(arena, m, k);
+        matrix* b = tb ? mat_create(arena, n, k) : mat_create(arena, k, n);
+        matrix* out = mat_create(arena, m, n);
+        f64* expected = PUSH_ARRAY(arena, f64, (u64)m * n);
+ 
+        mat_fill_rand(a, -1.0f, 1.0f);
+        mat_fill_rand(b, -1.0f, 1.0f);
+        mat_fill(out, 1234.0f);                        // garbage that zero_out must wipe
+ 
+        b32 ok = mat_mul(out, a, b, true, ta, tb);
+        CHECK(ok);
+ 
+        ref_matmul(expected, m, n, k, a, b, ta, tb);
+        for (u64 i = 0; i < (u64)m * n; i++) {
+            f64 err = fabs((f64)out->data[i] - expected[i]);
+            if (err > worst) { worst = err; }
+        }
+        cases++;
+ 
+        arena_temp_end(scratch);
+    }
+ 
+    printf("    %u shape/flag combinations, worst abs error vs f64 reference = %g\n", cases, worst);
+    CHECK(worst < 1e-4);
+ 
+    arena_destroy(arena);
+}
 
 int main(void) {
     RUN_TEST(test_create);
@@ -417,3 +486,4 @@ int main(void) {
 
     return test_summary();
 }
+

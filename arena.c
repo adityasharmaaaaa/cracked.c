@@ -81,11 +81,13 @@ void arena_pop(mem_arena* arena, u64 size) {
 }
 
 void arena_pop_to(mem_arena* arena, u64 pos) {
+    if (!arena) return;
     u64 size = pos < arena->pos ? arena->pos - pos : 0;
     arena_pop(arena, size);
 }
 
 void arena_clear(mem_arena* arena) {
+    if (!arena) return;
     arena_pop_to(arena, ARENA_BASE_POS);
 }
 
@@ -102,7 +104,7 @@ mem_arena_temp arena_temp_begin(mem_arena* arena) {
 
 void arena_temp_end(mem_arena_temp temp) {
     // A zeroed temp (from a failed scratch_get) has arena == NULL: ignore it.
-    if (temp.arena == NULL) { return; }
+    if (!temp.arena) { return; }
     arena_pop_to(temp.arena, temp.start_pos);
 }
 
@@ -158,6 +160,7 @@ mem_arena_temp arena_scratch_get(mem_arena** conflicts, u32 num_conflicts) {
 }
 
 void arena_scratch_release(mem_arena_temp scratch) {
+    if (!scratch.arena) return;
     arena_temp_end(scratch);
 }
 

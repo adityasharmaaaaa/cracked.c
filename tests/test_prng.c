@@ -72,7 +72,9 @@ static void test_randf_statistics(void) {
         if (x < lo) lo = x;
         if (x > hi) hi = x;
         sum += x;
-        buckets[(u32)(x * 10.0f)]++;
+        u32 bucket_idx = (u32)(x * 10.0f);
+        if (bucket_idx >= 10) bucket_idx = 9; // Clamp to prevent out-of-bounds
+        buckets[bucket_idx]++;
     }
 
     // Mean of U[0,1) is 0.5, standard error of the mean over 1M samples is ~0.0003.
