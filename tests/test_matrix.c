@@ -474,6 +474,96 @@ static void test_matmul_vs_reference(void) {
     arena_destroy(arena);
 }
 
+static void test_matmul_zero_out(void) {
+    mem_arena* a = arena_create(MiB(1), KiB(64));
+    if (!a) { CHECK(a != NULL); return; }
+ 
+    matrix* P = mat_create(a, 2, 3);
+    matrix* Q = mat_create(a, 3, 2);
+    matrix* out = mat_create(a, 2, 2);
+    f32 pv[] = { 1, 2, 3, 4, 5, 6 };
+    f32 qv[] = { 7, 8, 9, 10, 11, 12 };
+    set(P, pv, 6);
+    set(Q, qv, 6);
+ 
+    // zero_out = true: previous contents are irrelevant.
+    mat_fill(out, 100.0f);
+    CHECK(mat_mul(out, P, Q, true, false, false));
+    f32 product[] = { 58, 64, 139, 154 };
+    CHECK(equals(out, product, 4));
+ 
+    // zero_out = false: the product is ADDED to what is already there.
+    mat_fill(out, 100.0f);
+    CHECK(mat_mul(out, P, Q, false, false, false));
+    f32 plus_one[] = { 158, 164, 239, 254 };
+    CHECK(equals(out, plus_one, 4));
+ 
+    // Twice: this is exactly what happens when a variable feeds two operations and
+    // backprop delivers two gradient contributions that must be summed.
+    CHECK(mat_mul(out, P, Q, false, false, false));
+    f32 plus_two[] = { 216, 228, 378, 408 };
+    CHECK(equals(out, plus_two, 4));
+ 
+    // First call overwrites, second accumulates -> exactly 2x the product.
+    CHECK(mat_mul(out, P, Q, true,  false, false));
+    CHECK(mat_mul(out, P, Q, false, false, false));
+    f32 doubled[] = { 116, 128, 278, 308 };
+    CHECK(equals(out, doubled, 4));
+ 
+    arena_destroy(a);
+}
+ 
+// ---------------------------------------------------------------------------
+// mat_mul: shape errors leave the output untouched
+// ---------------------------------------------------------------------------
+static void test_matmul_shape_errors(void) {
+    mem_arena* a = arena_create(MiB(1), KiB(64));
+    if (!a) { CHECK(a != NULL); return; }
+ 
+    matrix* A = mat_create(a, 2, 3);
+    matrix* B = mat_create(a, 3, 2);
+    mat_fill(A, 1.0f);
+    mat_fill(B, 1.0f);
+ 
+    f32 sentinel4[] = { -7, -7, -7, -7 };
+    matrix* out = mat_create(a, 2, 2);
+    mat_fill(out, -7.0f);
+ 
+    // Inner dimensions disagree: (2x3) * (4x2).
+    matrix* B_bad = mat_create(a, 4, 2);
+    CHECK(!mat_mul(out, A, B_bad, true, false, false));
+    CHECK(equals(out, sentinel4, 4));
+ 
+    // Output has the wrong shape. 1x4 has the same ELEMENT COUNT as 2x2 but is still wrong.
+    matrix* out_1x4 = mat_create(a, 1, 4);
+    mat_fill(out_1x4, -7.0f);
+    CHECK(!mat_mul(out_1x4, A, B, true, false, false));
+    CHECK(out_1x4->data[0] == -7.0f && out_1x4->data[3] == -7.0f);
+ 
+    matrix* out_3x3 = mat_create(a, 3, 3);
+    CHECK(!mat_mul(out_3x3, A, B, true, false, false));
+ 
+    // The flags change which shapes are valid. X and Y are both stored 2x3:
+    matrix* X = mat_create(a, 2, 3);
+    matrix* Y = mat_create(a, 2, 3);
+    matrix* o22 = mat_create(a, 2, 2);
+    matrix* o33 = mat_create(a, 3, 3);
+    CHECK(!mat_mul(o22, X, Y, true, false, false));   // (2x3) * (2x3): inner 3 vs 2
+    CHECK( mat_mul(o22, X, Y, true, false, true));    // (2x3) * (3x2) -> 2x2
+    CHECK( mat_mul(o33, X, Y, true, true,  false));   // (3x2) * (2x3) -> 3x3
+    CHECK(!mat_mul(o22, X, Y, true, true,  true));    // (3x2) * (3x2): inner 2 vs 3
+ 
+    // A failed accumulate (zero_out = false) must not modify out either.
+    CHECK(!mat_mul(out, A, B_bad, false, false, false));
+    CHECK(equals(out, sentinel4, 4));
+ 
+    // And a failed zero_out = true must not have cleared it before failing.
+    CHECK(!mat_mul(out, A, B_bad, true, false, false));
+    CHECK(equals(out, sentinel4, 4));
+ 
+    arena_destroy(a);
+}
+
 int main(void) {
     RUN_TEST(test_create);
     RUN_TEST(test_create_failures);
