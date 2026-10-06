@@ -79,3 +79,4 @@ b32 mat_cross_entropy_add_grad(
     matrix* p_grad, matrix* q_grad,
     const matrix* p, const matrix* q, const matrix* grad
 );
+

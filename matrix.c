@@ -1,3 +1,20 @@
+// matrix.c
+//
+// Like arena.c and prng.c, this file is #included from main.c (unity build), after
+// base.h, arena.h, prng.h and matrix.h, so it includes nothing itself.
+//
+// Status:
+//   implemented (Wed): create, copy, clear, fill, fill_rand, scale, sum, argmax, add, sub
+//   implemented (Thu): mul
+//   stubs:             load (Week 4), relu, softmax, cross_entropy
+//
+// Stubs return NULL / false on purpose: calling one by accident fails loudly.
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// Same rows AND same cols. (Comparing only rows*cols would wrongly accept 2x3 vs 3x2.)
 static b32 mat_same_shape(const matrix* a, const matrix* b) {
     return a->rows == b->rows && a->cols == b->cols;
 }
@@ -7,6 +24,19 @@ static u64 mat_count(const matrix* mat) {
     return (u64)mat->rows * mat->cols;
 }
 
+// True if the two matrices' data ranges share any memory (not just "same pointer":
+// a matrix can be a view into the middle of another one's data).
+static b32 mat_overlaps(const matrix* x, const matrix* y) {
+    uintptr_t x0 = (uintptr_t)x->data;
+    uintptr_t x1 = x0 + mat_count(x) * sizeof(f32);
+    uintptr_t y0 = (uintptr_t)y->data;
+    uintptr_t y1 = y0 + mat_count(y) * sizeof(f32);
+    return x0 < y1 && y0 < x1;
+}
+
+// ---------------------------------------------------------------------------
+// Creation
+// ---------------------------------------------------------------------------
 
 matrix* mat_create(mem_arena* arena, u32 rows, u32 cols) {
     if (rows == 0 || cols == 0) { return NULL; }
@@ -40,6 +70,9 @@ matrix* mat_load(mem_arena* arena, u32 rows, u32 cols, const char* filename) {
     return NULL;
 }
 
+// ---------------------------------------------------------------------------
+// Basic operations
+// ---------------------------------------------------------------------------
 
 b32 mat_copy(matrix* dst, const matrix* src) {
     if (!mat_same_shape(dst, src)) { return false; }
@@ -120,45 +153,63 @@ b32 mat_sub(matrix* out, const matrix* a, const matrix* b) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Matrix multiply
+// ---------------------------------------------------------------------------
 
 b32 mat_mul(
     matrix* out, const matrix* a, const matrix* b,
     b8 zero_out, b8 transpose_a, b8 transpose_b
 ) {
-    u32 m = transpose_a?a->cols:a->rows;
-    u32 k = transpose_b?a->rows:a->cols;
-    u32 kb = transpose_b?b->cols:b->rows;
-    u32 n = transpose_b?b->rows:b->cols;
+    // Logical shapes: op(a) is m x k and op(b) is k x n. The flags only change how the
+    // STORED matrix is laid out: a transposed operand is stored with rows and cols swapped.
+    u32 m  = transpose_a ? a->cols : a->rows;
+    u32 k  = transpose_a ? a->rows : a->cols;
+    u32 kb = transpose_b ? b->cols : b->rows;
+    u32 n  = transpose_b ? b->rows : b->cols;
 
-    if(k!=kb){
-        return false;
-    }
-    if(out->rows != m || out->cols != n){
-        return false;
-    }
-    if(mat_overlaps(out,a) || mat_overlaps(out,b)){
-        return false;
-    }
-    if(zero_out){
-        mat_clear(out);
-    }
+    // Check everything BEFORE writing anything.
+    if (k != kb) { return false; }                       // inner dimensions must agree
+    if (out->rows != m || out->cols != n) { return false; }
 
-    u64 a_rs=transpose_a?1:a->cols;
-    u64 a_cs=transpose_a?a->cols:1;
-    u64 b_rs=transpose_b?1:b->cols;
-    u64 b_cs=transpose_b?b->cols:1;
+    // Writing out[i][j] while a later iteration still needs the old a or b is wrong.
+    // (An output element depends on a whole row of a and a whole column of b.)
+    if (mat_overlaps(out, a) || mat_overlaps(out, b)) { return false; }
 
-    for(u32 i=0; i<m; i++){
-        for(u32 kk=0; kk<k; kk++){
-            f32 a_ik=a->data[i*a_rs+kk*a_cs];
-            for(u32 j=0; j<n; j++){
-                out->data[(u64)i*n+j]+=a_ik*b->data[kk*b_rs+j*b_cs];
+    if (zero_out) { mat_clear(out); }
+
+    // Strides: the element (r, c) of op(x) lives at x->data[r * row_stride + c * col_stride].
+    //
+    //                  stored as      (r, c) is at          row_stride  col_stride
+    //   not transposed rows x cols    r * cols + c          cols        1
+    //   transposed     cols x rows    c * cols + r          1           cols
+    //
+    // The transpose is never built: we only swap the two strides.
+    // u64 strides make `i * stride` a 64-bit multiply (u32 * u32 could overflow).
+    u64 a_rs = transpose_a ? 1 : a->cols;
+    u64 a_cs = transpose_a ? a->cols : 1;
+    u64 b_rs = transpose_b ? 1 : b->cols;
+    u64 b_cs = transpose_b ? b->cols : 1;
+
+    // Loop order i-k-j: the innermost loop walks out's row and (when b is not
+    // transposed) b's row, both contiguous in memory. a(i, kk) is loop-invariant
+    // in the inner loop, so it is read once into a register.
+    for (u32 i = 0; i < m; i++) {
+        for (u32 kk = 0; kk < k; kk++) {
+            f32 a_ik = a->data[i * a_rs + kk * a_cs];
+
+            for (u32 j = 0; j < n; j++) {
+                out->data[(u64)i * n + j] += a_ik * b->data[kk * b_rs + j * b_cs];
             }
         }
     }
-    
+
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// Stubs (implemented later)
+// ---------------------------------------------------------------------------
 
 b32 mat_relu(matrix* out, const matrix* in) {
     (void)out; (void)in;
@@ -175,3 +226,5 @@ b32 mat_cross_entropy(matrix* out, const matrix* p, const matrix* q) {
     return false;
 }
 
+// mat_relu_add_grad, mat_softmax_add_grad, mat_cross_entropy_add_grad:
+// declared in matrix.h, defined in Week 3.

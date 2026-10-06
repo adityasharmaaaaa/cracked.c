@@ -1,3 +1,7 @@
+// tests/test_matrix.c
+//
+// Build and run with:  make test
+
 #include "base.h"
 #include "arena.h"
 #include "prng.h"
@@ -332,10 +336,13 @@ static void test_fill_rand(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// mat_mul: hand-computed answers
+// ---------------------------------------------------------------------------
 static void test_matmul_known(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
- 
+
     // The 2x2 example from the Thursday exercise.
     matrix* A = mat_create(a, 2, 2);
     matrix* B = mat_create(a, 2, 2);
@@ -344,24 +351,24 @@ static void test_matmul_known(void) {
     f32 bv[] = { 5, 6, 7, 8 };
     set(A, av, 4);
     set(B, bv, 4);
- 
+
     f32 ab[]   = { 19, 22, 43, 50 };   // A  * B
     f32 atb[]  = { 26, 30, 38, 44 };   // A^T * B
     f32 abt[]  = { 17, 23, 39, 53 };   // A  * B^T
     f32 atbt[] = { 23, 31, 34, 46 };   // A^T * B^T
- 
+
     CHECK(mat_mul(C, A, B, true, false, false));  CHECK(equals(C, ab, 4));
     CHECK(mat_mul(C, A, B, true, true,  false));  CHECK(equals(C, atb, 4));
     CHECK(mat_mul(C, A, B, true, false, true));   CHECK(equals(C, abt, 4));
     CHECK(mat_mul(C, A, B, true, true,  true));   CHECK(equals(C, atbt, 4));
- 
+
     // Identity: A * I = A.
     matrix* I = mat_create(a, 2, 2);
     f32 iv[] = { 1, 0, 0, 1 };
     set(I, iv, 4);
     CHECK(mat_mul(C, A, I, true, false, false));
     CHECK(equals(C, av, 4));
- 
+
     // Non-square: (2x3) * (3x2) = (2x2). The classic textbook example.
     matrix* P = mat_create(a, 2, 3);
     matrix* Q = mat_create(a, 3, 2);
@@ -376,7 +383,7 @@ static void test_matmul_known(void) {
     set(Q, qv, 6);
     CHECK(mat_mul(R, P, Q, true, false, false));
     CHECK(equals(R, pq, 4));
- 
+
     // The same product through the flags: store P^T (3x2) and Q^T (2x3) explicitly
     // and let transpose_a / transpose_b undo them. All four must give the same answer.
     matrix* Pt = mat_create(a, 3, 2);
@@ -388,11 +395,11 @@ static void test_matmul_known(void) {
                   8, 10, 12 };
     set(Pt, ptv, 6);
     set(Qt, qtv, 6);
- 
+
     CHECK(mat_mul(R, Pt, Q,  true, true,  false)); CHECK(equals(R, pq, 4));
     CHECK(mat_mul(R, P,  Qt, true, false, true));  CHECK(equals(R, pq, 4));
     CHECK(mat_mul(R, Pt, Qt, true, true,  true));  CHECK(equals(R, pq, 4));
- 
+
     // A non-square OUTPUT: (3x2) * (2x3) = (3x3).
     matrix* big = mat_create(a, 3, 3);
     CHECK(mat_mul(big, Q, Qt, true, false, false));
@@ -400,14 +407,19 @@ static void test_matmul_known(void) {
                   9*7+10*8,  9*9+10*10,  9*11+10*12,
                   11*7+12*8, 11*9+12*10, 11*11+12*12 };
     CHECK(equals(big, qqt, 9));
- 
+
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// mat_mul: against an independent reference, many shapes, all four flag combos
+// ---------------------------------------------------------------------------
+
+// Logical element (i, j) of op(x), straight from the definition of transpose.
 static f64 ref_at(const matrix* x, b32 transposed, u32 i, u32 j) {
     return transposed ? x->data[(u64)j * x->cols + i] : x->data[(u64)i * x->cols + j];
 }
- 
+
 // out (m x n) = op(a) * op(b), accumulated in f64, with the i-j-k loop order
 // (deliberately different from the real implementation's i-k-j and its strides).
 static void ref_matmul(f64* out, u32 m, u32 n, u32 k,
@@ -422,18 +434,18 @@ static void ref_matmul(f64* out, u32 m, u32 n, u32 k,
         }
     }
 }
- 
+
 static void test_matmul_vs_reference(void) {
     mem_arena* arena = arena_create(MiB(16), MiB(1));
     if (!arena) { CHECK(arena != NULL); return; }
- 
+
     u32 dims[] = { 1, 2, 3, 5, 8, 17, 33 };
     u32 num_dims = sizeof(dims) / sizeof(dims[0]);
     f64 worst = 0.0;
     u32 cases = 0;
- 
+
     prng_seed(2024, 1);
- 
+
     for (u32 mi = 0; mi < num_dims; mi++)
     for (u32 ki = 0; ki < num_dims; ki++)
     for (u32 ni = 0; ni < num_dims; ni++)
@@ -441,43 +453,46 @@ static void test_matmul_vs_reference(void) {
         u32 m = dims[mi], k = dims[ki], n = dims[ni];
         b32 ta = (flags & 1) != 0;
         b32 tb = (flags & 2) != 0;
- 
+
         // Temp scope: everything allocated in this iteration is freed at the end.
         mem_arena_temp scratch = arena_temp_begin(arena);
- 
+
         // Stored shapes depend on the flags (the table from Tuesday's exercise).
         matrix* a = ta ? mat_create(arena, k, m) : mat_create(arena, m, k);
         matrix* b = tb ? mat_create(arena, n, k) : mat_create(arena, k, n);
         matrix* out = mat_create(arena, m, n);
         f64* expected = PUSH_ARRAY(arena, f64, (u64)m * n);
- 
+
         mat_fill_rand(a, -1.0f, 1.0f);
         mat_fill_rand(b, -1.0f, 1.0f);
         mat_fill(out, 1234.0f);                        // garbage that zero_out must wipe
- 
+
         b32 ok = mat_mul(out, a, b, true, ta, tb);
         CHECK(ok);
- 
+
         ref_matmul(expected, m, n, k, a, b, ta, tb);
         for (u64 i = 0; i < (u64)m * n; i++) {
             f64 err = fabs((f64)out->data[i] - expected[i]);
             if (err > worst) { worst = err; }
         }
         cases++;
- 
+
         arena_temp_end(scratch);
     }
- 
+
     printf("    %u shape/flag combinations, worst abs error vs f64 reference = %g\n", cases, worst);
     CHECK(worst < 1e-4);
- 
+
     arena_destroy(arena);
 }
 
+// ---------------------------------------------------------------------------
+// mat_mul: zero_out and accumulation
+// ---------------------------------------------------------------------------
 static void test_matmul_zero_out(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
- 
+
     matrix* P = mat_create(a, 2, 3);
     matrix* Q = mat_create(a, 3, 2);
     matrix* out = mat_create(a, 2, 2);
@@ -485,64 +500,64 @@ static void test_matmul_zero_out(void) {
     f32 qv[] = { 7, 8, 9, 10, 11, 12 };
     set(P, pv, 6);
     set(Q, qv, 6);
- 
+
     // zero_out = true: previous contents are irrelevant.
     mat_fill(out, 100.0f);
     CHECK(mat_mul(out, P, Q, true, false, false));
     f32 product[] = { 58, 64, 139, 154 };
     CHECK(equals(out, product, 4));
- 
+
     // zero_out = false: the product is ADDED to what is already there.
     mat_fill(out, 100.0f);
     CHECK(mat_mul(out, P, Q, false, false, false));
     f32 plus_one[] = { 158, 164, 239, 254 };
     CHECK(equals(out, plus_one, 4));
- 
+
     // Twice: this is exactly what happens when a variable feeds two operations and
     // backprop delivers two gradient contributions that must be summed.
     CHECK(mat_mul(out, P, Q, false, false, false));
     f32 plus_two[] = { 216, 228, 378, 408 };
     CHECK(equals(out, plus_two, 4));
- 
+
     // First call overwrites, second accumulates -> exactly 2x the product.
     CHECK(mat_mul(out, P, Q, true,  false, false));
     CHECK(mat_mul(out, P, Q, false, false, false));
     f32 doubled[] = { 116, 128, 278, 308 };
     CHECK(equals(out, doubled, 4));
- 
+
     arena_destroy(a);
 }
- 
+
 // ---------------------------------------------------------------------------
 // mat_mul: shape errors leave the output untouched
 // ---------------------------------------------------------------------------
 static void test_matmul_shape_errors(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
- 
+
     matrix* A = mat_create(a, 2, 3);
     matrix* B = mat_create(a, 3, 2);
     mat_fill(A, 1.0f);
     mat_fill(B, 1.0f);
- 
+
     f32 sentinel4[] = { -7, -7, -7, -7 };
     matrix* out = mat_create(a, 2, 2);
     mat_fill(out, -7.0f);
- 
+
     // Inner dimensions disagree: (2x3) * (4x2).
     matrix* B_bad = mat_create(a, 4, 2);
     CHECK(!mat_mul(out, A, B_bad, true, false, false));
     CHECK(equals(out, sentinel4, 4));
- 
+
     // Output has the wrong shape. 1x4 has the same ELEMENT COUNT as 2x2 but is still wrong.
     matrix* out_1x4 = mat_create(a, 1, 4);
     mat_fill(out_1x4, -7.0f);
     CHECK(!mat_mul(out_1x4, A, B, true, false, false));
     CHECK(out_1x4->data[0] == -7.0f && out_1x4->data[3] == -7.0f);
- 
+
     matrix* out_3x3 = mat_create(a, 3, 3);
     CHECK(!mat_mul(out_3x3, A, B, true, false, false));
- 
+
     // The flags change which shapes are valid. X and Y are both stored 2x3:
     matrix* X = mat_create(a, 2, 3);
     matrix* Y = mat_create(a, 2, 3);
@@ -552,29 +567,32 @@ static void test_matmul_shape_errors(void) {
     CHECK( mat_mul(o22, X, Y, true, false, true));    // (2x3) * (3x2) -> 2x2
     CHECK( mat_mul(o33, X, Y, true, true,  false));   // (3x2) * (2x3) -> 3x3
     CHECK(!mat_mul(o22, X, Y, true, true,  true));    // (3x2) * (3x2): inner 2 vs 3
- 
+
     // A failed accumulate (zero_out = false) must not modify out either.
     CHECK(!mat_mul(out, A, B_bad, false, false, false));
     CHECK(equals(out, sentinel4, 4));
- 
+
     // And a failed zero_out = true must not have cleared it before failing.
     CHECK(!mat_mul(out, A, B_bad, true, false, false));
     CHECK(equals(out, sentinel4, 4));
- 
+
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// mat_mul: out must not overlap the inputs
+// ---------------------------------------------------------------------------
 static void test_matmul_aliasing(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
- 
+
     matrix* A = mat_create(a, 2, 2);
     matrix* B = mat_create(a, 2, 2);
     f32 av[] = { 1, 2, 3, 4 };
     f32 bv[] = { 5, 6, 7, 8 };
     set(A, av, 4);
     set(B, bv, 4);
- 
+
     // Same matrix as output and input: rejected, nothing modified.
     CHECK(!mat_mul(A, A, B, true, false, false));
     CHECK(equals(A, av, 4));
@@ -582,23 +600,23 @@ static void test_matmul_aliasing(void) {
     CHECK(equals(B, bv, 4));
     CHECK(!mat_mul(A, A, A, true, false, false));
     CHECK(equals(A, av, 4));
- 
+
     // Partial overlap: two DIFFERENT matrix structs whose data ranges overlap.
     // Checking only "same pointer" would miss this.
     matrix* backing = mat_create(a, 4, 2);               // 8 floats
     matrix a_view   = { 2, 2, backing->data };           // floats 0..3
     matrix out_view = { 2, 2, backing->data + 2 };       // floats 2..5: overlaps a_view
     CHECK(!mat_mul(&out_view, &a_view, B, true, false, false));
- 
+
     // Disjoint views are fine.
     matrix out_far = { 2, 2, backing->data + 4 };        // floats 4..7: no overlap with 0..3
     CHECK(mat_mul(&out_far, &a_view, B, true, false, false));
- 
+
     arena_destroy(a);
 }
- 
+
 // ---------------------------------------------------------------------------
- 
+
 int main(void) {
     RUN_TEST(test_create);
     RUN_TEST(test_create_failures);
@@ -613,6 +631,6 @@ int main(void) {
     RUN_TEST(test_matmul_zero_out);
     RUN_TEST(test_matmul_shape_errors);
     RUN_TEST(test_matmul_aliasing);
- 
+
     return test_summary();
 }
