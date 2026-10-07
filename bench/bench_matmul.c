@@ -1,3 +1,26 @@
+// bench/bench_matmul.c
+//
+// Benchmarks mat_mul (naive, i-k-j loops) for square matrices at several sizes and for all
+// four transpose combinations, and optionally compares against a BLAS library
+// (Apple Accelerate on macOS) when compiled with -DUSE_BLAS.
+//
+//   make bench                       builds with -O2 and writes bench/results/matmul_baseline.csv
+//   ./build/bench_matmul [max_size]  CSV goes to stdout, progress to stderr (default max 1024)
+//
+// Method (this is what makes the numbers trustworthy):
+//   * one untimed warm-up run first (caches, page tables, CPU clock ramp-up),
+//   * each timed sample is a BATCH of back-to-back calls lasting at least ~2 ms, divided by
+//     the batch size. A single 3 microsecond call cannot be timed with a clock that ticks every
+//     1 microsecond (or even 40 ns) -- a 2 ms batch makes the tick error negligible,
+//   * several timed samples, then report the MINIMUM and the MEDIAN.
+//     Noise (other processes, thermal throttling) only ever makes a run slower, so the
+//     minimum is the best estimate of what the code can do; the median shows how noisy
+//     the machine was.
+//   * every result is checked against the BLAS answer before it is timed.
+//
+// GFLOPS: multiplying an m x k by a k x n matrix is 2*m*k*n floating-point operations
+// (one multiply + one add per term). flops / nanoseconds = giga-flops per second.
+
 #include "base.h"
 #include "arena.h"
 #include "prng.h"
@@ -30,6 +53,10 @@
     #endif
 #endif
 
+// ---------------------------------------------------------------------------
+// The implementations under test. Same signature so the timing loop is shared.
+// ---------------------------------------------------------------------------
+
 typedef void (*matmul_fn)(matrix* out, const matrix* a, const matrix* b, b32 ta, b32 tb);
 
 static void run_naive(matrix* out, const matrix* a, const matrix* b, b32 ta, b32 tb) {
@@ -57,15 +84,60 @@ static void run_blas(matrix* out, const matrix* a, const matrix* b, b32 ta, b32 
 }
 #endif
 
+// ---------------------------------------------------------------------------
+// Cross-check helper
+// ---------------------------------------------------------------------------
+
+#if defined(USE_BLAS)
+
+static f64 max_abs_diff(const matrix* x, const matrix* y) {
+    f64 worst = 0.0;
+    u64 n = (u64)x->rows * x->cols;
+    for (u64 i = 0; i < n; i++) {
+        f64 d = fabs((f64)x->data[i] - (f64)y->data[i]);
+        if (d > worst) { worst = d; }
+    }
+    return worst;
+}
+
+// A checker that has never been seen failing proves nothing ("max diff 0" on every row
+// could mean perfect agreement... or a broken comparison). So: show it can fail.
+static void selfcheck_max_abs_diff(mem_arena* arena) {
+    mem_arena_temp temp = arena_temp_begin(arena);
+    matrix* x = mat_create(arena, 4, 4);
+    matrix* y = mat_create(arena, 4, 4);
+    mat_fill_rand(x, -1.0f, 1.0f);
+    mat_copy(y, x);
+
+    b32 identical_ok = max_abs_diff(x, y) == 0.0;
+    y->data[5] += 0.25f;                                  // plant a known difference
+    b32 planted_ok = fabs(max_abs_diff(x, y) - 0.25) < 1e-6;
+
+    if (!identical_ok || !planted_ok) {
+        fprintf(stderr, "internal error: max_abs_diff is broken\n");
+        exit(3);
+    }
+    arena_temp_end(temp);
+}
+
+#endif  // USE_BLAS
+
+// ---------------------------------------------------------------------------
+// Timing
+// ---------------------------------------------------------------------------
+
 static int cmp_u64(const void* x, const void* y) {
     u64 a = *(const u64*)x, b = *(const u64*)y;
     return (a > b) - (a < b);
 }
 
 typedef struct {
-    u64 min_ns;
-    u64 median_ns;
+    u64 min_ns;        // per call
+    u64 median_ns;     // per call
+    u32 inner;         // calls per timed sample (batch size)
 } bench_result;
+
+#define BENCH_TARGET_SAMPLE_NS 2000000ULL   // each timed sample should last >= 2 ms
 
 // `reps` must be odd so the median is an actual measurement.
 static bench_result bench_run(
@@ -77,14 +149,27 @@ static bench_result bench_run(
 
     fn(out, a, b, ta, tb);                       // warm-up, not recorded
 
+    // Calibrate: how many calls fit in one ~2 ms sample? (Big sizes: 1. Tiny sizes: thousands.)
+    u64 c0 = timer_ns();
+    fn(out, a, b, ta, tb);
+    u64 one_call = timer_ns() - c0;
+    if (one_call == 0) { one_call = 1; }
+
+    u64 inner64 = BENCH_TARGET_SAMPLE_NS / one_call;
+    if (inner64 < 1) { inner64 = 1; }
+    if (inner64 > 1000000) { inner64 = 1000000; }
+    u32 inner = (u32)inner64;
+
     for (u32 r = 0; r < reps; r++) {
         u64 t0 = timer_ns();
-        fn(out, a, b, ta, tb);
-        times[r] = timer_ns() - t0;
+        for (u32 i = 0; i < inner; i++) {
+            fn(out, a, b, ta, tb);
+        }
+        times[r] = (timer_ns() - t0) / inner;
     }
 
     qsort(times, reps, sizeof(u64), cmp_u64);
-    return (bench_result){ .min_ns = times[0], .median_ns = times[reps / 2] };
+    return (bench_result){ .min_ns = times[0], .median_ns = times[reps / 2], .inner = inner };
 }
 
 static f64 gflops(u32 size, u64 ns) {
@@ -93,12 +178,14 @@ static f64 gflops(u32 size, u64 ns) {
 }
 
 static void print_csv_row(const char* impl, u32 size, b32 ta, b32 tb, u32 reps, bench_result r) {
-    printf("%s,%u,%d,%d,%u,%.4f,%.4f,%.3f,%.3f\n",
-           impl, size, ta ? 1 : 0, tb ? 1 : 0, reps,
+    printf("%s,%u,%d,%d,%u,%u,%.5f,%.5f,%.3f,%.3f\n",
+           impl, size, ta ? 1 : 0, tb ? 1 : 0, reps, r.inner,
            timer_ns_to_ms(r.min_ns), timer_ns_to_ms(r.median_ns),
            gflops(size, r.min_ns), gflops(size, r.median_ns));
     fflush(stdout);
 }
+
+// ---------------------------------------------------------------------------
 
 int main(int argc, char** argv) {
     u32 max_size = 1024;
@@ -117,11 +204,17 @@ int main(int argc, char** argv) {
     fprintf(stderr, "note: built without -DUSE_BLAS, so no BLAS comparison and no correctness cross-check.\n");
 #endif
 
+    fprintf(stderr, "timer resolution: %llu ns\n", (unsigned long long)timer_resolution_ns());
+
     // 4 matrices of at most 4096^2 floats (64 MiB each) fit in a 1 GiB reservation.
     mem_arena* arena = arena_create(GiB(1), MiB(64));
     if (!arena) { fprintf(stderr, "arena_create failed\n"); return 1; }
 
-    printf("impl,size,transpose_a,transpose_b,reps,min_ms,median_ms,gflops_best,gflops_median\n");
+#if defined(USE_BLAS)
+    selfcheck_max_abs_diff(arena);
+#endif
+
+    printf("impl,size,transpose_a,transpose_b,reps,calls_per_sample,min_ms,median_ms,gflops_best,gflops_median\n");
 
     u32 sizes[] = { 64, 128, 256, 512, 1024, 2048, 4096 };
     f32 checksum = 0.0f;                         // use the results so nothing can be optimized away
@@ -158,11 +251,7 @@ int main(int argc, char** argv) {
             // Cross-check: does our answer match the BLAS answer? A fast wrong answer is worthless.
             run_naive(out, a, b, ta, tb);
             run_blas(out_blas, a, b, ta, tb);
-            f64 worst = 0.0;
-            for (u64 i = 0; i < (u64)size * size; i++) {
-                f64 d = fabs((f64)out->data[i] - (f64)out_blas->data[i]);
-                if (d > worst) { worst = d; }
-            }
+            f64 worst = max_abs_diff(out, out_blas);
             if (worst > 1e-5 * size) {
                 fprintf(stderr, "MISMATCH vs BLAS at size %u %s: max abs diff %g\n", size, label, worst);
                 return 2;
