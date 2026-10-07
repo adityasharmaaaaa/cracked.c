@@ -40,17 +40,13 @@ static void test_measures_sleep(void) {
 }
 
 static void test_resolution(void) {
-    // Smallest non-zero gap between two back-to-back readings = the clock's practical resolution.
-    u64 smallest = ~(u64)0;
-    for (u32 i = 0; i < 10000; i++) {
-        u64 a = timer_ns();
-        u64 b = timer_ns();
-        if (b > a && b - a < smallest) { smallest = b - a; }
-    }
-    printf("    smallest observable tick: %llu ns\n", (unsigned long long)smallest);
+    u64 res = timer_resolution_ns();
+    printf("    clock resolution: %llu ns\n", (unsigned long long)res);
 
-    // Anything we benchmark must run far longer than this, or the number is just noise.
-    CHECK(smallest < 10000);                // finer than 10 microseconds
+    // A clock that ticks in whole microseconds (macOS CLOCK_MONOTONIC) reports exactly
+    // 1000 ns here, and every benchmark under ~1 ms would be mostly rounding error.
+    // Real high-resolution counters are 1 to ~50 ns (Apple Silicon's is ~42 ns).
+    CHECK(res < 500);
 }
 
 static void test_ms_conversion(void) {
