@@ -661,6 +661,115 @@ static void test_relu(void) {
     arena_destroy(a);
 }
 
+static b32 row_sums_to_one(const matrix* m) {
+    for (u32 r = 0; r < m->rows; r++) {
+        f64 sum = 0.0;
+        for (u32 c = 0; c < m->cols; c++) { sum += m->data[(u64)r * m->cols + c]; }
+        if (fabs(sum - 1.0) > 1e-5) { return false; }
+    }
+    return true;
+}
+ 
+static void test_softmax(void) {
+    mem_arena* a = arena_create(MiB(1), KiB(64));
+    if (!a) { CHECK(a != NULL); return; }
+ 
+    // softmax([1, 2, 3]) = [e^1, e^2, e^3] / (e^1 + e^2 + e^3)
+    f32 expected[] = { 0.09003057f, 0.24472847f, 0.66524096f };
+ 
+    matrix* x = mat_create(a, 1, 3);
+    matrix* y = mat_create(a, 1, 3);
+    f32 xv[] = { 1, 2, 3 };
+    set(x, xv, 3);
+    CHECK(mat_softmax(y, x));
+    for (u32 i = 0; i < 3; i++) { CHECK_NEAR(y->data[i], expected[i], 1e-6); }
+    CHECK(row_sums_to_one(y));
+ 
+    // Shift invariance: softmax(x + c) == softmax(x). This is also the trick that makes the
+    // naive formula's overflow avoidable: with logits near 1000, exp(1000) = inf in f32.
+    f32 big[] = { 1001, 1002, 1003 };
+    set(x, big, 3);
+    CHECK(mat_softmax(y, x));
+    for (u32 i = 0; i < 3; i++) {
+        CHECK(!isnan(y->data[i]) && !isinf(y->data[i]));
+        CHECK_NEAR(y->data[i], expected[i], 1e-6);
+    }
+ 
+    // All-NEGATIVE huge logits: exp(-1000) = 0 for every element unless the max is subtracted
+    // (and the max must be found properly, even though every value is below zero).
+    f32 neg[] = { -999, -998, -997 };
+    set(x, neg, 3);
+    CHECK(mat_softmax(y, x));
+    for (u32 i = 0; i < 3; i++) {
+        CHECK(!isnan(y->data[i]));
+        CHECK_NEAR(y->data[i], expected[i], 1e-6);
+    }
+ 
+    // One logit dominates: no NaN, essentially [1, 0, 0].
+    f32 dom[] = { 100, 0, 0 };
+    set(x, dom, 3);
+    CHECK(mat_softmax(y, x));
+    CHECK_NEAR(y->data[0], 1.0, 1e-6);
+    CHECK(!isnan(y->data[1]) && y->data[1] >= 0.0f && y->data[1] < 1e-30f);
+ 
+    // The maximum can be ANYWHERE in the row. If the max search misses it, the shift is too
+    // small and exp() overflows (exp(200) = inf in f32). Softmax's shift-invariance hides a
+    // slightly-wrong max, so the test needs a huge gap to expose a missed element.
+    f32 last_big[]  = { 0, 0, 200 };
+    f32 mid_big[]   = { 0, 200, 0 };
+    f32 first_big[] = { 200, 0, 0 };
+    set(x, last_big, 3);
+    CHECK(mat_softmax(y, x));
+    CHECK(!isnan(y->data[2]) && y->data[2] > 0.999f && y->data[0] < 1e-30f);
+    set(x, mid_big, 3);
+    CHECK(mat_softmax(y, x));
+    CHECK(!isnan(y->data[1]) && y->data[1] > 0.999f);
+    set(x, first_big, 3);
+    CHECK(mat_softmax(y, x));
+    CHECK(!isnan(y->data[0]) && y->data[0] > 0.999f);
+ 
+    // Uniform logits -> uniform probabilities.
+    matrix* u = mat_create(a, 1, 4);
+    matrix* uo = mat_create(a, 1, 4);
+    mat_fill(u, 5.0f);
+    CHECK(mat_softmax(uo, u));
+    for (u32 i = 0; i < 4; i++) { CHECK_NEAR(uo->data[i], 0.25, 1e-6); }
+ 
+    // Rows are independent: a 2x3 matrix is two separate softmaxes, NOT one softmax over 6 numbers.
+    matrix* m = mat_create(a, 2, 3);
+    matrix* mo = mat_create(a, 2, 3);
+    f32 mv[] = { 1, 2, 3,
+                 3, 2, 1 };
+    set(m, mv, 6);
+    CHECK(mat_softmax(mo, m));
+    CHECK(row_sums_to_one(mo));                       // each row sums to 1 (not 0.5)
+    CHECK_NEAR(mo->data[0], expected[0], 1e-6);
+    CHECK_NEAR(mo->data[3], expected[2], 1e-6);       // second row is the first one reversed
+    CHECK_NEAR(mo->data[5], expected[0], 1e-6);
+ 
+    // A single column: each row has one element, so every output is exactly 1.
+    matrix* col = mat_create(a, 3, 1);
+    matrix* colo = mat_create(a, 3, 1);
+    f32 cv[] = { -4, 0, 17 };
+    set(col, cv, 3);
+    CHECK(mat_softmax(colo, col));
+    CHECK(colo->data[0] == 1.0f && colo->data[1] == 1.0f && colo->data[2] == 1.0f);
+ 
+    // In place gives the same answer as a separate output.
+    matrix* ip = mat_create(a, 2, 3);
+    mat_copy(ip, m);
+    CHECK(mat_softmax(ip, ip));
+    for (u32 i = 0; i < 6; i++) { CHECK(ip->data[i] == mo->data[i]); }
+ 
+    // Shape mismatch: false, output untouched.
+    matrix* wrong = mat_create(a, 3, 2);
+    mat_fill(wrong, -7.0f);
+    CHECK(!mat_softmax(wrong, m));
+    CHECK(wrong->data[0] == -7.0f);
+ 
+    arena_destroy(a);
+}
+
 int main(void) {
     RUN_TEST(test_create);
     RUN_TEST(test_create_failures);
@@ -675,6 +784,8 @@ int main(void) {
     RUN_TEST(test_matmul_zero_out);
     RUN_TEST(test_matmul_shape_errors);
     RUN_TEST(test_matmul_aliasing);
-
+    RUN_TEST(test_relu);
+    RUN_TEST(test_softmax);
+    
     return test_summary();
 }

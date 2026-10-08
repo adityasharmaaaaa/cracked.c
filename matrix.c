@@ -207,8 +207,32 @@ b32 mat_relu(matrix* out, const matrix* in) {
 }
 
 b32 mat_softmax(matrix* out, const matrix* in) {
-    (void)out; (void)in;
-    return false;
+    if(!mat_same_shape(out,in)){
+        return false;
+    }
+    
+    for(u32 r=0; r<in->rows; r++){
+        const f32* x = in->data + (u64)r*in->cols;
+        f32* y=out->data + (u64)r*out->cols;
+
+        f32 max=x[0];
+        for(u32 c=1; c<in->cols; c++){
+            if(x[c]>max){
+                max=x[c];
+            }
+        }
+
+        f32 sum=0.0f;
+        for(u32 c=0; c<in->cols; c++){
+            y[c]=expf(x[c]-max);
+            sum+=y[c];
+        }
+
+        for(u32 c=0; c<in->cols; c++){
+            y[c]/=sum;
+        }
+    }
+    return true;
 }
 
 b32 mat_cross_entropy(matrix* out, const matrix* p, const matrix* q) {
@@ -218,3 +242,4 @@ b32 mat_cross_entropy(matrix* out, const matrix* p, const matrix* q) {
 
 // mat_relu_add_grad, mat_softmax_add_grad, mat_cross_entropy_add_grad:
 // declared in matrix.h, defined in Week 3.
+
