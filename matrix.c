@@ -236,8 +236,19 @@ b32 mat_softmax(matrix* out, const matrix* in) {
 }
 
 b32 mat_cross_entropy(matrix* out, const matrix* p, const matrix* q) {
-    (void)out; (void)p; (void)q;
-    return false;
+    if(!mat_same_shape(p,q) || !mat_same_shape(p,out)){
+        return false;
+    }
+
+    u64 n=mat_count(p);
+    for(u64 i=0; i<n; i++){
+        f32 qi=q->data[i];
+        if(qi<MAT_LOG_EPS){
+            qi=MAT_LOG_EPS;
+        }
+        out->data[i]=p->data[i]*-logf(qi);
+    }
+    return true;
 }
 
 // mat_relu_add_grad, mat_softmax_add_grad, mat_cross_entropy_add_grad:
