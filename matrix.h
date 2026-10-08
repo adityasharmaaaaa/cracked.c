@@ -19,7 +19,6 @@ typedef struct {
     f32* data; // row-major
 } matrix;
 
-// ---- creation and basic operations -----------------------------------------
 
 // Allocates a zeroed rows x cols matrix (struct + data) from `arena`.
 // Returns NULL if rows or cols is 0, or if the arena cannot hold it. On failure the
@@ -65,13 +64,25 @@ b32 mat_mul(
 
 // ---- activations and loss ---------------------------------------------------
 
-b32 mat_relu(matrix* out, const matrix* in);                         // out = max(in, 0)
-b32 mat_softmax(matrix* out, const matrix* in);                      // numerically stable
+// Layout convention for everything below: one ROW per sample, so a batch of 64 images with
+// 10 class scores each is a 64 x 10 matrix. All shapes must match; on mismatch these return
+// false and write nothing. out may be the SAME matrix as an input (exact aliasing), but
+// must not partially overlap it.
+
+// out = max(in, 0), elementwise. NaN stays NaN (an activation must not hide a bug upstream).
+b32 mat_relu(matrix* out, const matrix* in);
+
+// Softmax over each ROW independently: out[r][c] = exp(in[r][c]) / sum_k exp(in[r][k]).
+// Numerically stable (subtracts the row maximum first), so huge logits do not overflow.
+b32 mat_softmax(matrix* out, const matrix* in);
+
+// Elementwise: out = -p * log(q).  p is the target distribution, q the prediction.
+// q is clamped to at least MAT_LOG_EPS so log(0) never produces -inf (and 0 * -inf = NaN).
+// This is NOT yet a single loss number: the loss for a batch is mat_sum(out) / rows.
+// Argument order matters: swapping p and q gives a different (wrong) quantity.
 b32 mat_cross_entropy(matrix* out, const matrix* p, const matrix* q);
 
-// ---- gradients (implemented in Week 3, next to autograd) -------------------
-//
-// "add_grad" means ACCUMULATE into the output gradient (+=), never overwrite.
+#define MAT_LOG_EPS 1e-7f
 
 b32 mat_relu_add_grad(matrix* out, const matrix* in, const matrix* grad);
 b32 mat_softmax_add_grad(matrix* out, const matrix* softmax_out, const matrix* grad);
@@ -79,4 +90,3 @@ b32 mat_cross_entropy_add_grad(
     matrix* p_grad, matrix* q_grad,
     const matrix* p, const matrix* q, const matrix* grad
 );
-

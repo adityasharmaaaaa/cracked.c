@@ -25,9 +25,6 @@ static b32 equals(const matrix* m, const f32* values, u32 count) {
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// mat_create
-// ---------------------------------------------------------------------------
 static void test_create(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     CHECK(a != NULL);
@@ -102,9 +99,6 @@ static void test_create_failures(void) {
     arena_destroy(a);
 }
 
-// ---------------------------------------------------------------------------
-// clear / fill / scale
-// ---------------------------------------------------------------------------
 static void test_clear_fill_scale(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -133,9 +127,6 @@ static void test_clear_fill_scale(void) {
     arena_destroy(a);
 }
 
-// ---------------------------------------------------------------------------
-// sum
-// ---------------------------------------------------------------------------
 static void test_sum(void) {
     mem_arena* a = arena_create(MiB(16), MiB(1));
     if (!a) { CHECK(a != NULL); return; }
@@ -164,9 +155,6 @@ static void test_sum(void) {
     arena_destroy(a);
 }
 
-// ---------------------------------------------------------------------------
-// argmax
-// ---------------------------------------------------------------------------
 static void test_argmax(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -202,9 +190,6 @@ static void test_argmax(void) {
     arena_destroy(a);
 }
 
-// ---------------------------------------------------------------------------
-// copy
-// ---------------------------------------------------------------------------
 static void test_copy(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -237,9 +222,6 @@ static void test_copy(void) {
     arena_destroy(a);
 }
 
-// ---------------------------------------------------------------------------
-// add / sub
-// ---------------------------------------------------------------------------
 static void test_add_sub(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -289,9 +271,6 @@ static void test_add_sub(void) {
     arena_destroy(a);
 }
 
-// ---------------------------------------------------------------------------
-// fill_rand
-// ---------------------------------------------------------------------------
 static void test_fill_rand(void) {
     mem_arena* a = arena_create(MiB(16), MiB(1));
     if (!a) { CHECK(a != NULL); return; }
@@ -336,9 +315,6 @@ static void test_fill_rand(void) {
     arena_destroy(a);
 }
 
-// ---------------------------------------------------------------------------
-// mat_mul: hand-computed answers
-// ---------------------------------------------------------------------------
 static void test_matmul_known(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -411,9 +387,6 @@ static void test_matmul_known(void) {
     arena_destroy(a);
 }
 
-// ---------------------------------------------------------------------------
-// mat_mul: against an independent reference, many shapes, all four flag combos
-// ---------------------------------------------------------------------------
 
 // Logical element (i, j) of op(x), straight from the definition of transpose.
 static f64 ref_at(const matrix* x, b32 transposed, u32 i, u32 j) {
@@ -486,9 +459,6 @@ static void test_matmul_vs_reference(void) {
     arena_destroy(arena);
 }
 
-// ---------------------------------------------------------------------------
-// mat_mul: zero_out and accumulation
-// ---------------------------------------------------------------------------
 static void test_matmul_zero_out(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -528,9 +498,6 @@ static void test_matmul_zero_out(void) {
     arena_destroy(a);
 }
 
-// ---------------------------------------------------------------------------
-// mat_mul: shape errors leave the output untouched
-// ---------------------------------------------------------------------------
 static void test_matmul_shape_errors(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -579,9 +546,6 @@ static void test_matmul_shape_errors(void) {
     arena_destroy(a);
 }
 
-// ---------------------------------------------------------------------------
-// mat_mul: out must not overlap the inputs
-// ---------------------------------------------------------------------------
 static void test_matmul_aliasing(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -615,7 +579,239 @@ static void test_matmul_aliasing(void) {
     arena_destroy(a);
 }
 
-// ---------------------------------------------------------------------------
+static void test_relu(void) {
+    mem_arena* a = arena_create(MiB(1), KiB(64));
+    if (!a) { CHECK(a != NULL); return; }
+
+    matrix* in  = mat_create(a, 2, 3);
+    matrix* out = mat_create(a, 2, 3);
+
+    f32 iv[] = { -2.0f, -0.5f, 0.0f,
+                  0.5f,  3.0f, -1e30f };
+    f32 ev[] = {  0.0f,  0.0f, 0.0f,
+                  0.5f,  3.0f,  0.0f };
+    set(in, iv, 6);
+    CHECK(mat_relu(out, in));
+    CHECK(equals(out, ev, 6));
+    CHECK(in->data[0] == -2.0f);                      // the input is not modified
+
+    // In place.
+    CHECK(mat_relu(in, in));
+    CHECK(equals(in, ev, 6));
+
+    // Infinities behave: +inf passes, -inf is clipped.
+    matrix* inf_in = mat_create(a, 1, 2);
+    matrix* inf_out = mat_create(a, 1, 2);
+    inf_in->data[0] = INFINITY;
+    inf_in->data[1] = -INFINITY;
+    CHECK(mat_relu(inf_out, inf_in));
+    CHECK(isinf(inf_out->data[0]) && inf_out->data[0] > 0);
+    CHECK(inf_out->data[1] == 0.0f);
+
+    // NaN must come out as NaN. Turning it into 0 would hide whatever bug created it.
+    matrix* nan_in = mat_create(a, 1, 1);
+    matrix* nan_out = mat_create(a, 1, 1);
+    nan_in->data[0] = NAN;
+    CHECK(mat_relu(nan_out, nan_in));
+    CHECK(isnan(nan_out->data[0]));
+
+    // Shape mismatch (same element count!): false, output untouched.
+    matrix* wrong = mat_create(a, 3, 2);
+    mat_fill(wrong, -7.0f);
+    CHECK(!mat_relu(wrong, in));
+    CHECK(wrong->data[0] == -7.0f && wrong->data[5] == -7.0f);
+
+    arena_destroy(a);
+}
+
+static b32 row_sums_to_one(const matrix* m) {
+    for (u32 r = 0; r < m->rows; r++) {
+        f64 sum = 0.0;
+        for (u32 c = 0; c < m->cols; c++) { sum += m->data[(u64)r * m->cols + c]; }
+        if (fabs(sum - 1.0) > 1e-5) { return false; }
+    }
+    return true;
+}
+
+static void test_softmax(void) {
+    mem_arena* a = arena_create(MiB(1), KiB(64));
+    if (!a) { CHECK(a != NULL); return; }
+
+    // softmax([1, 2, 3]) = [e^1, e^2, e^3] / (e^1 + e^2 + e^3)
+    f32 expected[] = { 0.09003057f, 0.24472847f, 0.66524096f };
+
+    matrix* x = mat_create(a, 1, 3);
+    matrix* y = mat_create(a, 1, 3);
+    f32 xv[] = { 1, 2, 3 };
+    set(x, xv, 3);
+    CHECK(mat_softmax(y, x));
+    for (u32 i = 0; i < 3; i++) { CHECK_NEAR(y->data[i], expected[i], 1e-6); }
+    CHECK(row_sums_to_one(y));
+
+    // Shift invariance: softmax(x + c) == softmax(x). This is also the trick that makes the
+    // naive formula's overflow avoidable: with logits near 1000, exp(1000) = inf in f32.
+    f32 big[] = { 1001, 1002, 1003 };
+    set(x, big, 3);
+    CHECK(mat_softmax(y, x));
+    for (u32 i = 0; i < 3; i++) {
+        CHECK(!isnan(y->data[i]) && !isinf(y->data[i]));
+        CHECK_NEAR(y->data[i], expected[i], 1e-6);
+    }
+
+    // All-NEGATIVE huge logits: exp(-1000) = 0 for every element unless the max is subtracted
+    // (and the max must be found properly, even though every value is below zero).
+    f32 neg[] = { -999, -998, -997 };
+    set(x, neg, 3);
+    CHECK(mat_softmax(y, x));
+    for (u32 i = 0; i < 3; i++) {
+        CHECK(!isnan(y->data[i]));
+        CHECK_NEAR(y->data[i], expected[i], 1e-6);
+    }
+
+    // One logit dominates: no NaN, essentially [1, 0, 0].
+    f32 dom[] = { 100, 0, 0 };
+    set(x, dom, 3);
+    CHECK(mat_softmax(y, x));
+    CHECK_NEAR(y->data[0], 1.0, 1e-6);
+    CHECK(!isnan(y->data[1]) && y->data[1] >= 0.0f && y->data[1] < 1e-30f);
+
+    // The maximum can be ANYWHERE in the row. If the max search misses it, the shift is too
+    // small and exp() overflows (exp(200) = inf in f32). Softmax's shift-invariance hides a
+    // slightly-wrong max, so the test needs a huge gap to expose a missed element.
+    f32 last_big[]  = { 0, 0, 200 };
+    f32 mid_big[]   = { 0, 200, 0 };
+    f32 first_big[] = { 200, 0, 0 };
+    set(x, last_big, 3);
+    CHECK(mat_softmax(y, x));
+    CHECK(!isnan(y->data[2]) && y->data[2] > 0.999f && y->data[0] < 1e-30f);
+    set(x, mid_big, 3);
+    CHECK(mat_softmax(y, x));
+    CHECK(!isnan(y->data[1]) && y->data[1] > 0.999f);
+    set(x, first_big, 3);
+    CHECK(mat_softmax(y, x));
+    CHECK(!isnan(y->data[0]) && y->data[0] > 0.999f);
+
+    // Uniform logits -> uniform probabilities.
+    matrix* u = mat_create(a, 1, 4);
+    matrix* uo = mat_create(a, 1, 4);
+    mat_fill(u, 5.0f);
+    CHECK(mat_softmax(uo, u));
+    for (u32 i = 0; i < 4; i++) { CHECK_NEAR(uo->data[i], 0.25, 1e-6); }
+
+    // Rows are independent: a 2x3 matrix is two separate softmaxes, NOT one softmax over 6 numbers.
+    matrix* m = mat_create(a, 2, 3);
+    matrix* mo = mat_create(a, 2, 3);
+    f32 mv[] = { 1, 2, 3,
+                 3, 2, 1 };
+    set(m, mv, 6);
+    CHECK(mat_softmax(mo, m));
+    CHECK(row_sums_to_one(mo));                       // each row sums to 1 (not 0.5)
+    CHECK_NEAR(mo->data[0], expected[0], 1e-6);
+    CHECK_NEAR(mo->data[3], expected[2], 1e-6);       // second row is the first one reversed
+    CHECK_NEAR(mo->data[5], expected[0], 1e-6);
+
+    // A single column: each row has one element, so every output is exactly 1.
+    matrix* col = mat_create(a, 3, 1);
+    matrix* colo = mat_create(a, 3, 1);
+    f32 cv[] = { -4, 0, 17 };
+    set(col, cv, 3);
+    CHECK(mat_softmax(colo, col));
+    CHECK(colo->data[0] == 1.0f && colo->data[1] == 1.0f && colo->data[2] == 1.0f);
+
+    // In place gives the same answer as a separate output.
+    matrix* ip = mat_create(a, 2, 3);
+    mat_copy(ip, m);
+    CHECK(mat_softmax(ip, ip));
+    for (u32 i = 0; i < 6; i++) { CHECK(ip->data[i] == mo->data[i]); }
+
+    // Shape mismatch: false, output untouched.
+    matrix* wrong = mat_create(a, 3, 2);
+    mat_fill(wrong, -7.0f);
+    CHECK(!mat_softmax(wrong, m));
+    CHECK(wrong->data[0] == -7.0f);
+
+    arena_destroy(a);
+}
+
+static void test_cross_entropy(void) {
+    mem_arena* a = arena_create(MiB(1), KiB(64));
+    if (!a) { CHECK(a != NULL); return; }
+
+    matrix* p = mat_create(a, 1, 3);
+    matrix* q = mat_create(a, 1, 3);
+    matrix* out = mat_create(a, 1, 3);
+
+    // True class is index 1, predicted probability 0.7: loss = -ln(0.7) there, 0 elsewhere.
+    f32 pv[] = { 0.0f, 1.0f, 0.0f };
+    f32 qv[] = { 0.2f, 0.7f, 0.1f };
+    set(p, pv, 3);
+    set(q, qv, 3);
+    CHECK(mat_cross_entropy(out, p, q));
+    CHECK_NEAR(out->data[0], 0.0, 1e-9);
+    CHECK_NEAR(out->data[1], 0.35667494, 1e-6);
+    CHECK_NEAR(out->data[2], 0.0, 1e-9);
+
+    // Order matters: p is the target, q the prediction. Here p has a zero where q does not.
+    matrix* p2 = mat_create(a, 1, 2);
+    matrix* q2 = mat_create(a, 1, 2);
+    matrix* o2 = mat_create(a, 1, 2);
+    f32 p2v[] = { 1.0f, 0.0f };
+    f32 q2v[] = { 0.25f, 0.75f };
+    set(p2, p2v, 2);
+    set(q2, q2v, 2);
+    CHECK(mat_cross_entropy(o2, p2, q2));
+    CHECK_NEAR(o2->data[0], 1.3862944, 1e-6);         // -ln(0.25)
+    CHECK_NEAR(o2->data[1], 0.0, 1e-9);
+
+    // Perfect prediction -> zero loss.
+    matrix* one = mat_create(a, 1, 1);
+    matrix* oo = mat_create(a, 1, 1);
+    mat_fill(one, 1.0f);
+    CHECK(mat_cross_entropy(oo, one, one));
+    CHECK_NEAR(oo->data[0], 0.0, 1e-9);
+
+    // q = 0 must not blow up. With a target of 0 the result must be exactly 0 (not 0 * -inf = NaN),
+    // with a target of 1 it is a large but FINITE number, -ln(MAT_LOG_EPS).
+    matrix* pz = mat_create(a, 1, 2);
+    matrix* qz = mat_create(a, 1, 2);
+    matrix* oz = mat_create(a, 1, 2);
+    pz->data[0] = 0.0f; pz->data[1] = 1.0f;
+    qz->data[0] = 0.0f; qz->data[1] = 0.0f;
+    CHECK(mat_cross_entropy(oz, pz, qz));
+    CHECK(oz->data[0] == 0.0f);
+    CHECK(!isnan(oz->data[1]) && !isinf(oz->data[1]));
+    CHECK_NEAR(oz->data[1], 16.118096, 1e-4);
+
+    // NaN in the prediction must come out as NaN, not be clamped away.
+    qz->data[1] = NAN;
+    CHECK(mat_cross_entropy(oz, pz, qz));
+    CHECK(isnan(oz->data[1]));
+
+    // The sanity check every classifier should pass: with all-zero logits over 10 classes the
+    // softmax is uniform (0.1 each), so the loss is -ln(0.1) = ln(10) = 2.3026 per sample,
+    // whatever the labels are. A freshly initialised MNIST network should start near this.
+    u32 batch = 4, classes = 10;
+    matrix* logits = mat_create(a, batch, classes);
+    matrix* probs = mat_create(a, batch, classes);
+    matrix* labels = mat_create(a, batch, classes);
+    matrix* ce = mat_create(a, batch, classes);
+    for (u32 r = 0; r < batch; r++) { labels->data[r * classes + (r * 3) % classes] = 1.0f; }
+
+    CHECK(mat_softmax(probs, logits));
+    CHECK(mat_cross_entropy(ce, labels, probs));
+    f32 mean_loss = mat_sum(ce) / (f32)batch;
+    CHECK_NEAR(mean_loss, 2.3025851, 1e-5);
+
+    // Shape mismatches: false, output untouched.
+    matrix* wrong = mat_create(a, 3, 1);
+    mat_fill(wrong, -7.0f);
+    CHECK(!mat_cross_entropy(wrong, p, q));           // out has the wrong shape
+    CHECK(wrong->data[0] == -7.0f);
+    CHECK(!mat_cross_entropy(out, p, wrong));         // q has the wrong shape
+
+    arena_destroy(a);
+}
+
 
 int main(void) {
     RUN_TEST(test_create);
@@ -631,6 +827,9 @@ int main(void) {
     RUN_TEST(test_matmul_zero_out);
     RUN_TEST(test_matmul_shape_errors);
     RUN_TEST(test_matmul_aliasing);
+    RUN_TEST(test_relu);
+    RUN_TEST(test_softmax);
+    RUN_TEST(test_cross_entropy);
 
     return test_summary();
 }
