@@ -2,17 +2,6 @@
 //
 // Like arena.c and prng.c, this file is #included from main.c (unity build), after
 // base.h, arena.h, prng.h and matrix.h, so it includes nothing itself.
-//
-// Status:
-//   implemented (Wed): create, copy, clear, fill, fill_rand, scale, sum, argmax, add, sub
-//   implemented (Thu): mul
-//   stubs:             load (Week 4), relu, softmax, cross_entropy
-//
-// Stubs return NULL / false on purpose: calling one by accident fails loudly.
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 // Same rows AND same cols. (Comparing only rows*cols would wrongly accept 2x3 vs 3x2.)
 static b32 mat_same_shape(const matrix* a, const matrix* b) {
@@ -153,9 +142,6 @@ b32 mat_sub(matrix* out, const matrix* a, const matrix* b) {
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Matrix multiply
-// ---------------------------------------------------------------------------
 
 b32 mat_mul(
     matrix* out, const matrix* a, const matrix* b,
@@ -207,13 +193,17 @@ b32 mat_mul(
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Stubs (implemented later)
-// ---------------------------------------------------------------------------
 
 b32 mat_relu(matrix* out, const matrix* in) {
-    (void)out; (void)in;
-    return false;
+    if(!mat_same_shape(out,in)){
+        return false;
+    }
+    u64 n=mat_count(in);
+    for(u64 i=0; i<n; i++){
+        f32 x=in->data[i];
+        out->data[i]=x<0.0f?0.0f:x;
+    }
+    return true;
 }
 
 b32 mat_softmax(matrix* out, const matrix* in) {

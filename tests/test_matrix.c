@@ -615,7 +615,51 @@ static void test_matmul_aliasing(void) {
     arena_destroy(a);
 }
 
-// ---------------------------------------------------------------------------
+
+static void test_relu(void) {
+    mem_arena* a = arena_create(MiB(1), KiB(64));
+    if (!a) { CHECK(a != NULL); return; }
+ 
+    matrix* in  = mat_create(a, 2, 3);
+    matrix* out = mat_create(a, 2, 3);
+ 
+    f32 iv[] = { -2.0f, -0.5f, 0.0f,
+                  0.5f,  3.0f, -1e30f };
+    f32 ev[] = {  0.0f,  0.0f, 0.0f,
+                  0.5f,  3.0f,  0.0f };
+    set(in, iv, 6);
+    CHECK(mat_relu(out, in));
+    CHECK(equals(out, ev, 6));
+    CHECK(in->data[0] == -2.0f);                      // the input is not modified
+ 
+    // In place.
+    CHECK(mat_relu(in, in));
+    CHECK(equals(in, ev, 6));
+ 
+    // Infinities behave: +inf passes, -inf is clipped.
+    matrix* inf_in = mat_create(a, 1, 2);
+    matrix* inf_out = mat_create(a, 1, 2);
+    inf_in->data[0] = INFINITY;
+    inf_in->data[1] = -INFINITY;
+    CHECK(mat_relu(inf_out, inf_in));
+    CHECK(isinf(inf_out->data[0]) && inf_out->data[0] > 0);
+    CHECK(inf_out->data[1] == 0.0f);
+ 
+    // NaN must come out as NaN. Turning it into 0 would hide whatever bug created it.
+    matrix* nan_in = mat_create(a, 1, 1);
+    matrix* nan_out = mat_create(a, 1, 1);
+    nan_in->data[0] = NAN;
+    CHECK(mat_relu(nan_out, nan_in));
+    CHECK(isnan(nan_out->data[0]));
+ 
+    // Shape mismatch (same element count!): false, output untouched.
+    matrix* wrong = mat_create(a, 3, 2);
+    mat_fill(wrong, -7.0f);
+    CHECK(!mat_relu(wrong, in));
+    CHECK(wrong->data[0] == -7.0f && wrong->data[5] == -7.0f);
+ 
+    arena_destroy(a);
+}
 
 int main(void) {
     RUN_TEST(test_create);
