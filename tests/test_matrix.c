@@ -954,6 +954,97 @@ static void test_softmax_grad(void) {
     arena_destroy(a);
 }
 
+
+static void test_cross_entropy_grad(void) {
+    mem_arena* a = arena_create(MiB(4), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+ 
+    matrix* p = mat_create(a, 1, 3);
+    matrix* q = mat_create(a, 1, 3);
+    matrix* g = mat_create(a, 1, 3);
+    matrix* dp = mat_create(a, 1, 3);
+    matrix* dq = mat_create(a, 1, 3);
+    f32 pv[] = { 0.0f, 1.0f, 0.0f };
+    f32 qv[] = { 0.2f, 0.7f, 0.1f };
+    set(p, pv, 3);
+    set(q, qv, 3);
+    mat_fill(g, 1.0f);
+ 
+    // dq = -p/q = [0, -1/0.7, 0];  dp = -ln(q) = [1.6094379, 0.3566749, 2.3025851]
+    CHECK(mat_cross_entropy_add_grad(dp, dq, p, q, g));
+    CHECK_NEAR(dq->data[0],  0.0,        1e-9);
+    CHECK_NEAR(dq->data[1], -1.4285714,  1e-6);
+    CHECK_NEAR(dq->data[2],  0.0,        1e-9);
+    CHECK_NEAR(dp->data[0],  1.6094379,  1e-6);
+    CHECK_NEAR(dp->data[1],  0.3566749,  1e-6);
+    CHECK_NEAR(dp->data[2],  2.3025851,  1e-6);
+ 
+    // The upstream gradient scales the result.
+    matrix* g3 = mat_create(a, 1, 3);
+    mat_fill(g3, 3.0f);
+    matrix* dq3 = mat_create(a, 1, 3);
+    CHECK(mat_cross_entropy_add_grad(NULL, dq3, p, q, g3));
+    CHECK_NEAR(dq3->data[1], -3.0 * 1.4285714, 1e-5);
+ 
+    // Either gradient (or both) may be NULL; labels usually need no gradient.
+    CHECK(mat_cross_entropy_add_grad(NULL, dq, p, q, g));
+    CHECK(mat_cross_entropy_add_grad(dp, NULL, p, q, g));
+    CHECK(mat_cross_entropy_add_grad(NULL, NULL, p, q, g));
+    CHECK_NEAR(dq->data[1], -2.0 * 1.4285714, 1e-5);  // the NULL-p call accumulated once more
+    CHECK_NEAR(dp->data[0],  2.0 * 1.6094379, 1e-5);  // the NULL-q call accumulated once more
+ 
+    // q = 0: the gradient must stay finite (the denominator is clamped), not -inf or NaN.
+    matrix* pz = mat_create(a, 1, 2);
+    matrix* qz = mat_create(a, 1, 2);
+    matrix* gz = mat_create(a, 1, 2);
+    matrix* dz = mat_create(a, 1, 2);
+    pz->data[0] = 0.0f; pz->data[1] = 1.0f;
+    mat_fill(gz, 1.0f);
+    CHECK(mat_cross_entropy_add_grad(NULL, dz, pz, qz, gz));
+    CHECK(dz->data[0] == 0.0f);                       // target 0: no gradient, and not NaN
+    CHECK(!isnan(dz->data[1]) && !isinf(dz->data[1]));
+    CHECK_NEAR(dz->data[1] / -1e7, 1.0, 1e-4);        // -p / MAT_LOG_EPS
+ 
+    // Shape mismatches: false, and NOTHING is written (even to the matrices that did match).
+    matrix* wrong = mat_create(a, 3, 1);
+    matrix* dp_clean = mat_create(a, 1, 3);
+    matrix* dq_clean = mat_create(a, 1, 3);
+    CHECK(!mat_cross_entropy_add_grad(dp_clean, wrong, p, q, g));   // q_grad has the wrong shape
+    CHECK(dp_clean->data[0] == 0.0f && dp_clean->data[1] == 0.0f);  // p_grad was NOT half-updated
+    CHECK(!mat_cross_entropy_add_grad(wrong, dq_clean, p, q, g));
+    CHECK(dq_clean->data[1] == 0.0f);
+    CHECK(!mat_cross_entropy_add_grad(NULL, NULL, p, q, wrong));
+ 
+    // Finite differences, for BOTH inputs. p in [0,1], q in [0.2, 0.95] (away from the clamp).
+    prng_seed(13, 1);
+    u32 R = 4, C = 7;
+    matrix* rp = mat_create(a, R, C);
+    matrix* rq = mat_create(a, R, C);
+    matrix* rg = mat_create(a, R, C);
+    matrix* an = mat_create(a, R, C);
+    matrix* nu = mat_create(a, R, C);
+    mat_fill_rand(rp, 0.0f, 1.0f);
+    mat_fill_rand(rq, 0.2f, 0.95f);
+    mat_fill_rand(rg, -1.0f, 1.0f);
+    gc_ctx ctx = { .out = mat_create(a, R, C), .g = rg, .p = rp, .q = rq };
+ 
+    gc_numeric_grad(rq, ce_loss, &ctx, GC_H, nu);
+    CHECK(mat_cross_entropy_add_grad(NULL, an, rp, rq, rg));
+    f64 err_q = gc_max_error(an, nu);
+ 
+    mat_clear(an);
+    gc_numeric_grad(rp, ce_loss, &ctx, GC_H, nu);
+    CHECK(mat_cross_entropy_add_grad(an, NULL, rp, rq, rg));
+    f64 err_p = gc_max_error(an, nu);
+ 
+    printf("    cross-entropy: max error vs finite differences: dq %.2e, dp %.2e\n", err_q, err_p);
+    CHECK(err_q < GC_TOLERANCE);
+    CHECK(err_p < GC_TOLERANCE);
+ 
+    arena_destroy(a);
+}
+
+
 int main(void) {
     RUN_TEST(test_create);
     RUN_TEST(test_create_failures);
@@ -973,6 +1064,7 @@ int main(void) {
     RUN_TEST(test_cross_entropy);
     RUN_TEST(test_relu_grad);
     RUN_TEST(test_softmax_grad);
-    
+    RUN_TEST(test_cross_entropy_grad);
+
     return test_summary();
 }

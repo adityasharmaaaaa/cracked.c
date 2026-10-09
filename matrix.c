@@ -285,3 +285,33 @@ b32 mat_softmax_add_grad(matrix* out, const matrix* softmax_out, const matrix* g
     }
     return true;
 }
+
+b32 mat_cross_entropy_add_grad(matrix* p_grad, matrix* q_grad, const matrix* p, const matrix* q, const matrix* grad){
+    if(!mat_same_shape(p,q) || !mat_same_shape(p,grad)){
+        return false;
+    }
+    if(p_grad && !mat_same_shape(p,p_grad)){
+        return false;
+    }
+    if(q_grad && !mat_same_shape(p,q_grad)){
+        return false;
+    }
+
+    u64 n=mat_count(p);
+    for(u64 i=0; i<n; i++){
+        f32 qi = q->data[i];
+        if(qi<MAT_LOG_EPS){
+            qi=MAT_LOG_EPS;
+        }
+        f32 g=grad->data[i];
+
+        if(p_grad){
+            p_grad->data[i]+=g*-logf(qi);
+        }
+        if(q_grad){
+            q_grad->data[i]+=g*-p->data[i]/qi;
+        }
+    }
+
+    return true;
+}
