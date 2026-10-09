@@ -251,6 +251,15 @@ b32 mat_cross_entropy(matrix* out, const matrix* p, const matrix* q) {
     return true;
 }
 
-// mat_relu_add_grad, mat_softmax_add_grad, mat_cross_entropy_add_grad:
-// declared in matrix.h, defined in Week 3.
-
+b32 mat_relu_add_grad(matrix* out, const matrix* in, const matrix* grad){
+    if(!mat_same_shape(out,in) || !mat_same_shape(out,grad)){
+        return false;
+    }
+    u64 n = mat_count(out);
+    for(u64 i=0; i<n; i++){
+        if(in->data[i]>0.0f){
+            out->data[i]+=grad->data[i];
+        }
+    }
+    return true;
+}

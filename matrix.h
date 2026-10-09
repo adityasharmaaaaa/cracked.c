@@ -19,6 +19,7 @@ typedef struct {
     f32* data; // row-major
 } matrix;
 
+// ---- creation and basic operations -----------------------------------------
 
 // Allocates a zeroed rows x cols matrix (struct + data) from `arena`.
 // Returns NULL if rows or cols is 0, or if the arena cannot hold it. On failure the
@@ -84,9 +85,37 @@ b32 mat_cross_entropy(matrix* out, const matrix* p, const matrix* q);
 
 #define MAT_LOG_EPS 1e-7f
 
+// ---- gradients (backward pass) ----------------------------------------------
+//
+// Naming: in every function below, `grad` is the gradient arriving from ABOVE
+// (dL/d(output of the op)), and the function adds the op's contribution to the gradient of
+// its input(s): dL/d(input) += (local derivative) * grad.
+//
+// "add" means ACCUMULATE (+=), never overwrite: a variable used by two ops receives two
+// contributions and they must sum. Zero the gradients once before each backward pass.
+//
+// Shapes must match; on mismatch these return false and write nothing. The output gradient
+// must not alias `grad` or the forward values.
+//
+// Every formula here is verified against finite differences in tests/test_matrix.c.
+
+// out += grad where in > 0, else += 0.  (The derivative at exactly 0 is taken to be 0.)
 b32 mat_relu_add_grad(matrix* out, const matrix* in, const matrix* grad);
+
+// Softmax Jacobian-vector product, per row. With y = softmax output and g = grad:
+//     out[r][j] += y[r][j] * (g[r][j] - sum_i g[r][i] * y[r][i])
+// Needs the softmax OUTPUT (not its input).
 b32 mat_softmax_add_grad(matrix* out, const matrix* softmax_out, const matrix* grad);
+
+// For out = -p * log(q) elementwise:
+//     p_grad += grad * -log(q)        q_grad += grad * -p / q
+// Either gradient may be NULL when that input needs none (typically p: the labels).
+// q is clamped to MAT_LOG_EPS in both formulas, exactly like the forward pass; below the clamp the
+// q gradient is therefore -p / MAT_LOG_EPS (huge but finite), which is a deliberate choice, not the
+// exact derivative of the clamped forward function (that would be 0, and learning would stall
+// precisely on the samples the network gets most wrong).
 b32 mat_cross_entropy_add_grad(
     matrix* p_grad, matrix* q_grad,
     const matrix* p, const matrix* q, const matrix* grad
 );
+

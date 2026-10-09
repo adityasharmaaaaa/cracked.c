@@ -22,7 +22,8 @@
 //   * The forward pass runs in f32, so tiny differences of two nearly equal numbers are noisy.
 //     The loss is accumulated in f64, and h = 1e-3 balances rounding noise against the
 //     truncation error of the formula.
-
+//
+// Requires base.h and matrix.h.
 
 #pragma once
 

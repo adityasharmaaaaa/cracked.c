@@ -812,6 +812,76 @@ static void test_cross_entropy(void) {
     arena_destroy(a);
 }
 
+typedef struct {
+    matrix* x;      // the matrix being perturbed (relu / softmax input)
+    matrix* out;    // forward output
+    matrix* g;      // fixed random upstream gradient: L = sum(g * out)
+    matrix* p;      // cross-entropy target
+    matrix* q;      // cross-entropy prediction
+} gc_ctx;
+ 
+static f64 relu_loss(void* c)    { gc_ctx* t = c; mat_relu(t->out, t->x);              return gc_weighted_sum(t->out, t->g); }
+static f64 softmax_loss(void* c) { gc_ctx* t = c; mat_softmax(t->out, t->x);           return gc_weighted_sum(t->out, t->g); }
+static f64 ce_loss(void* c)      { gc_ctx* t = c; mat_cross_entropy(t->out, t->p, t->q); return gc_weighted_sum(t->out, t->g); }
+ 
+// ---------------------------------------------------------------------------
+// mat_relu_add_grad
+// ---------------------------------------------------------------------------
+static void test_relu_grad(void) {
+    mem_arena* a = arena_create(MiB(4), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+ 
+    // Hand-computed. in = 0 gets gradient 0 (our convention); negatives are blocked.
+    matrix* in  = mat_create(a, 1, 5);
+    matrix* g   = mat_create(a, 1, 5);
+    matrix* out = mat_create(a, 1, 5);
+    f32 iv[] = { -1.0f, 0.0f, 2.0f, 3.0f, -0.001f };
+    f32 gv[] = {  5.0f, 6.0f, 7.0f, 8.0f,  9.0f };
+    set(in, iv, 5);
+    set(g, gv, 5);
+ 
+    CHECK(mat_relu_add_grad(out, in, g));
+    f32 expected[] = { 0, 0, 7, 8, 0 };
+    CHECK(equals(out, expected, 5));
+ 
+    // ACCUMULATES: a pre-existing gradient is added to, not overwritten.
+    mat_fill(out, 1.0f);
+    CHECK(mat_relu_add_grad(out, in, g));
+    f32 accumulated[] = { 1, 1, 8, 9, 1 };
+    CHECK(equals(out, accumulated, 5));
+    CHECK(mat_relu_add_grad(out, in, g));             // a second contribution
+    f32 twice[] = { 1, 1, 15, 17, 1 };
+    CHECK(equals(out, twice, 5));
+ 
+    // Shape mismatch: false, nothing written.
+    matrix* wrong = mat_create(a, 5, 1);
+    mat_fill(wrong, -7.0f);
+    CHECK(!mat_relu_add_grad(wrong, in, g));
+    CHECK(wrong->data[0] == -7.0f);
+    CHECK(!mat_relu_add_grad(out, in, wrong));
+ 
+    // Finite differences on random data. Keep every |x| well above h, because relu has a
+    // kink at 0 and the central difference straddling it would be meaningless.
+    prng_seed(11, 1);
+    u32 R = 4, C = 7;
+    matrix* x  = mat_create(a, R, C);
+    matrix* fo = mat_create(a, R, C);
+    matrix* fg = mat_create(a, R, C);
+    matrix* an = mat_create(a, R, C);
+    matrix* nu = mat_create(a, R, C);
+    mat_fill_rand(x, 0.05f, 2.0f);
+    for (u32 i = 0; i < R * C; i++) { if (prng_randf() < 0.5f) { x->data[i] = -x->data[i]; } }
+    mat_fill_rand(fg, -1.0f, 1.0f);
+ 
+    gc_ctx ctx = { .x = x, .out = fo, .g = fg };
+    gc_numeric_grad(x, relu_loss, &ctx, GC_H, nu);
+    CHECK(mat_relu_add_grad(an, x, fg));
+    f64 err = gc_max_error(an, nu);
+    printf("    relu: max error vs finite differences = %.2e\n", err);
+    CHECK(err < GC_TOLERANCE);
+ 
+    arena_destroy(a);
+}
 
 int main(void) {
     RUN_TEST(test_create);
@@ -830,6 +900,7 @@ int main(void) {
     RUN_TEST(test_relu);
     RUN_TEST(test_softmax);
     RUN_TEST(test_cross_entropy);
+    RUN_TEST(test_relu_grad);
 
     return test_summary();
 }
