@@ -263,3 +263,25 @@ b32 mat_relu_add_grad(matrix* out, const matrix* in, const matrix* grad){
     }
     return true;
 }
+
+b32 mat_softmax_add_grad(matrix* out, const matrix* softmax_out, const matrix* grad){
+    if(!mat_same_shape(out,softmax_out) || !mat_same_shape(out,grad)){
+        return false;
+    }
+
+    for(u32 r=0; r<out->rows; r++){
+        const f32* y = softmax_out->data + (u64)r*out->cols;
+        const f32* g = grad->data + (u64)r * out->cols;
+        f32* o=out->data + (u64)r*out->cols;
+
+        f64 dot = 0.0;
+        for(u32 c=0; c<out->cols; c++){
+            dot+=(f64)g[c]*(f64)y[c];
+        }
+
+        for(u32 c=0; c<out->cols; c++){
+            o[c]+=y[c]*(g[c]-(f32)dot);
+        }
+    }
+    return true;
+}

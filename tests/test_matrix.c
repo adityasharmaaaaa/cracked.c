@@ -883,6 +883,77 @@ static void test_relu_grad(void) {
     arena_destroy(a);
 }
 
+static void test_softmax_grad(void) {
+    mem_arena* a = arena_create(MiB(4), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+ 
+    // Hand-computed (independently, in Python): x = [1, 2, 3], upstream g = [1, 0, 0].
+    // out_j = y_j * (g_j - y_0), with y = [0.09003057, 0.24472847, 0.66524096].
+    matrix* x = mat_create(a, 1, 3);
+    matrix* y = mat_create(a, 1, 3);
+    matrix* g = mat_create(a, 1, 3);
+    matrix* out = mat_create(a, 1, 3);
+    f32 xv[] = { 1, 2, 3 };
+    f32 gv[] = { 1, 0, 0 };
+    set(x, xv, 3);
+    set(g, gv, 3);
+    mat_softmax(y, x);
+ 
+    CHECK(mat_softmax_add_grad(out, y, g));
+    CHECK_NEAR(out->data[0],  0.08192507, 1e-6);
+    CHECK_NEAR(out->data[1], -0.02203304, 1e-6);
+    CHECK_NEAR(out->data[2], -0.05989202, 1e-6);
+ 
+    // Shifting every logit by the same amount changes nothing, so the gradient must sum to
+    // zero over each row.
+    CHECK_NEAR(out->data[0] + out->data[1] + out->data[2], 0.0, 1e-6);
+ 
+    // Accumulates.
+    CHECK(mat_softmax_add_grad(out, y, g));
+    CHECK_NEAR(out->data[0], 2 * 0.08192507, 2e-6);
+ 
+    // Rows are independent: stack the same row twice, both get the same gradient.
+    matrix* x2 = mat_create(a, 2, 3);
+    matrix* y2 = mat_create(a, 2, 3);
+    matrix* g2 = mat_create(a, 2, 3);
+    matrix* o2 = mat_create(a, 2, 3);
+    f32 x2v[] = { 1, 2, 3, 1, 2, 3 };
+    f32 g2v[] = { 1, 0, 0, 1, 0, 0 };
+    set(x2, x2v, 6);
+    set(g2, g2v, 6);
+    mat_softmax(y2, x2);
+    CHECK(mat_softmax_add_grad(o2, y2, g2));
+    for (u32 i = 0; i < 3; i++) { CHECK(o2->data[i] == o2->data[3 + i]); }
+    CHECK_NEAR(o2->data[0], 0.08192507, 1e-6);
+ 
+    // Shape mismatch.
+    matrix* wrong = mat_create(a, 3, 1);
+    mat_fill(wrong, -7.0f);
+    CHECK(!mat_softmax_add_grad(wrong, y, g));
+    CHECK(wrong->data[0] == -7.0f);
+ 
+    // Finite differences on random logits and a random upstream gradient.
+    prng_seed(12, 1);
+    u32 R = 4, C = 7;
+    matrix* rx = mat_create(a, R, C);
+    matrix* ry = mat_create(a, R, C);
+    matrix* rg = mat_create(a, R, C);
+    matrix* an = mat_create(a, R, C);
+    matrix* nu = mat_create(a, R, C);
+    mat_fill_rand(rx, -5.0f, 5.0f);
+    mat_fill_rand(rg, -1.0f, 1.0f);
+    mat_softmax(ry, rx);
+ 
+    gc_ctx ctx = { .x = rx, .out = mat_create(a, R, C), .g = rg };
+    gc_numeric_grad(rx, softmax_loss, &ctx, GC_H, nu);
+    CHECK(mat_softmax_add_grad(an, ry, rg));
+    f64 err = gc_max_error(an, nu);
+    printf("    softmax: max error vs finite differences = %.2e\n", err);
+    CHECK(err < GC_TOLERANCE);
+ 
+    arena_destroy(a);
+}
+
 int main(void) {
     RUN_TEST(test_create);
     RUN_TEST(test_create_failures);
@@ -901,6 +972,7 @@ int main(void) {
     RUN_TEST(test_softmax);
     RUN_TEST(test_cross_entropy);
     RUN_TEST(test_relu_grad);
-
+    RUN_TEST(test_softmax_grad);
+    
     return test_summary();
 }
