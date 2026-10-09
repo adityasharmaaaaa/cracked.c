@@ -12,6 +12,7 @@
 #include "matrix.c"
 
 #include "test.h"
+#include "gradcheck.h"
 
 // Copies `count` values into a matrix so tests can write matrices as literals.
 static void set(matrix* m, const f32* values, u32 count) {
@@ -25,6 +26,9 @@ static b32 equals(const matrix* m, const f32* values, u32 count) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// mat_create
+// ---------------------------------------------------------------------------
 static void test_create(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     CHECK(a != NULL);
@@ -99,6 +103,9 @@ static void test_create_failures(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// clear / fill / scale
+// ---------------------------------------------------------------------------
 static void test_clear_fill_scale(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -127,6 +134,9 @@ static void test_clear_fill_scale(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// sum
+// ---------------------------------------------------------------------------
 static void test_sum(void) {
     mem_arena* a = arena_create(MiB(16), MiB(1));
     if (!a) { CHECK(a != NULL); return; }
@@ -155,6 +165,9 @@ static void test_sum(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// argmax
+// ---------------------------------------------------------------------------
 static void test_argmax(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -190,6 +203,9 @@ static void test_argmax(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// copy
+// ---------------------------------------------------------------------------
 static void test_copy(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -222,6 +238,9 @@ static void test_copy(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// add / sub
+// ---------------------------------------------------------------------------
 static void test_add_sub(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -271,6 +290,9 @@ static void test_add_sub(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// fill_rand
+// ---------------------------------------------------------------------------
 static void test_fill_rand(void) {
     mem_arena* a = arena_create(MiB(16), MiB(1));
     if (!a) { CHECK(a != NULL); return; }
@@ -315,6 +337,9 @@ static void test_fill_rand(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// mat_mul: hand-computed answers
+// ---------------------------------------------------------------------------
 static void test_matmul_known(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -387,6 +412,9 @@ static void test_matmul_known(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// mat_mul: against an independent reference, many shapes, all four flag combos
+// ---------------------------------------------------------------------------
 
 // Logical element (i, j) of op(x), straight from the definition of transpose.
 static f64 ref_at(const matrix* x, b32 transposed, u32 i, u32 j) {
@@ -459,6 +487,9 @@ static void test_matmul_vs_reference(void) {
     arena_destroy(arena);
 }
 
+// ---------------------------------------------------------------------------
+// mat_mul: zero_out and accumulation
+// ---------------------------------------------------------------------------
 static void test_matmul_zero_out(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -498,6 +529,9 @@ static void test_matmul_zero_out(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// mat_mul: shape errors leave the output untouched
+// ---------------------------------------------------------------------------
 static void test_matmul_shape_errors(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -546,6 +580,9 @@ static void test_matmul_shape_errors(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// mat_mul: out must not overlap the inputs
+// ---------------------------------------------------------------------------
 static void test_matmul_aliasing(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -579,6 +616,9 @@ static void test_matmul_aliasing(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// mat_relu
+// ---------------------------------------------------------------------------
 static void test_relu(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -624,6 +664,9 @@ static void test_relu(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// mat_softmax
+// ---------------------------------------------------------------------------
 static b32 row_sums_to_one(const matrix* m) {
     for (u32 r = 0; r < m->rows; r++) {
         f64 sum = 0.0;
@@ -733,6 +776,9 @@ static void test_softmax(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// mat_cross_entropy
+// ---------------------------------------------------------------------------
 static void test_cross_entropy(void) {
     mem_arena* a = arena_create(MiB(1), KiB(64));
     if (!a) { CHECK(a != NULL); return; }
@@ -812,6 +858,11 @@ static void test_cross_entropy(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// Gradients: shared plumbing for the finite-difference checks
+// ---------------------------------------------------------------------------
+
+// Everything a loss closure needs. Unused members stay NULL.
 typedef struct {
     matrix* x;      // the matrix being perturbed (relu / softmax input)
     matrix* out;    // forward output
@@ -819,18 +870,18 @@ typedef struct {
     matrix* p;      // cross-entropy target
     matrix* q;      // cross-entropy prediction
 } gc_ctx;
- 
+
 static f64 relu_loss(void* c)    { gc_ctx* t = c; mat_relu(t->out, t->x);              return gc_weighted_sum(t->out, t->g); }
 static f64 softmax_loss(void* c) { gc_ctx* t = c; mat_softmax(t->out, t->x);           return gc_weighted_sum(t->out, t->g); }
 static f64 ce_loss(void* c)      { gc_ctx* t = c; mat_cross_entropy(t->out, t->p, t->q); return gc_weighted_sum(t->out, t->g); }
- 
+
 // ---------------------------------------------------------------------------
 // mat_relu_add_grad
 // ---------------------------------------------------------------------------
 static void test_relu_grad(void) {
     mem_arena* a = arena_create(MiB(4), MiB(1));
     if (!a) { CHECK(a != NULL); return; }
- 
+
     // Hand-computed. in = 0 gets gradient 0 (our convention); negatives are blocked.
     matrix* in  = mat_create(a, 1, 5);
     matrix* g   = mat_create(a, 1, 5);
@@ -839,11 +890,11 @@ static void test_relu_grad(void) {
     f32 gv[] = {  5.0f, 6.0f, 7.0f, 8.0f,  9.0f };
     set(in, iv, 5);
     set(g, gv, 5);
- 
+
     CHECK(mat_relu_add_grad(out, in, g));
     f32 expected[] = { 0, 0, 7, 8, 0 };
     CHECK(equals(out, expected, 5));
- 
+
     // ACCUMULATES: a pre-existing gradient is added to, not overwritten.
     mat_fill(out, 1.0f);
     CHECK(mat_relu_add_grad(out, in, g));
@@ -852,14 +903,14 @@ static void test_relu_grad(void) {
     CHECK(mat_relu_add_grad(out, in, g));             // a second contribution
     f32 twice[] = { 1, 1, 15, 17, 1 };
     CHECK(equals(out, twice, 5));
- 
+
     // Shape mismatch: false, nothing written.
     matrix* wrong = mat_create(a, 5, 1);
     mat_fill(wrong, -7.0f);
     CHECK(!mat_relu_add_grad(wrong, in, g));
     CHECK(wrong->data[0] == -7.0f);
     CHECK(!mat_relu_add_grad(out, in, wrong));
- 
+
     // Finite differences on random data. Keep every |x| well above h, because relu has a
     // kink at 0 and the central difference straddling it would be meaningless.
     prng_seed(11, 1);
@@ -872,21 +923,24 @@ static void test_relu_grad(void) {
     mat_fill_rand(x, 0.05f, 2.0f);
     for (u32 i = 0; i < R * C; i++) { if (prng_randf() < 0.5f) { x->data[i] = -x->data[i]; } }
     mat_fill_rand(fg, -1.0f, 1.0f);
- 
+
     gc_ctx ctx = { .x = x, .out = fo, .g = fg };
     gc_numeric_grad(x, relu_loss, &ctx, GC_H, nu);
     CHECK(mat_relu_add_grad(an, x, fg));
     f64 err = gc_max_error(an, nu);
     printf("    relu: max error vs finite differences = %.2e\n", err);
     CHECK(err < GC_TOLERANCE);
- 
+
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// mat_softmax_add_grad
+// ---------------------------------------------------------------------------
 static void test_softmax_grad(void) {
     mem_arena* a = arena_create(MiB(4), MiB(1));
     if (!a) { CHECK(a != NULL); return; }
- 
+
     // Hand-computed (independently, in Python): x = [1, 2, 3], upstream g = [1, 0, 0].
     // out_j = y_j * (g_j - y_0), with y = [0.09003057, 0.24472847, 0.66524096].
     matrix* x = mat_create(a, 1, 3);
@@ -898,20 +952,20 @@ static void test_softmax_grad(void) {
     set(x, xv, 3);
     set(g, gv, 3);
     mat_softmax(y, x);
- 
+
     CHECK(mat_softmax_add_grad(out, y, g));
     CHECK_NEAR(out->data[0],  0.08192507, 1e-6);
     CHECK_NEAR(out->data[1], -0.02203304, 1e-6);
     CHECK_NEAR(out->data[2], -0.05989202, 1e-6);
- 
+
     // Shifting every logit by the same amount changes nothing, so the gradient must sum to
     // zero over each row.
     CHECK_NEAR(out->data[0] + out->data[1] + out->data[2], 0.0, 1e-6);
- 
+
     // Accumulates.
     CHECK(mat_softmax_add_grad(out, y, g));
     CHECK_NEAR(out->data[0], 2 * 0.08192507, 2e-6);
- 
+
     // Rows are independent: stack the same row twice, both get the same gradient.
     matrix* x2 = mat_create(a, 2, 3);
     matrix* y2 = mat_create(a, 2, 3);
@@ -925,13 +979,13 @@ static void test_softmax_grad(void) {
     CHECK(mat_softmax_add_grad(o2, y2, g2));
     for (u32 i = 0; i < 3; i++) { CHECK(o2->data[i] == o2->data[3 + i]); }
     CHECK_NEAR(o2->data[0], 0.08192507, 1e-6);
- 
+
     // Shape mismatch.
     matrix* wrong = mat_create(a, 3, 1);
     mat_fill(wrong, -7.0f);
     CHECK(!mat_softmax_add_grad(wrong, y, g));
     CHECK(wrong->data[0] == -7.0f);
- 
+
     // Finite differences on random logits and a random upstream gradient.
     prng_seed(12, 1);
     u32 R = 4, C = 7;
@@ -943,22 +997,24 @@ static void test_softmax_grad(void) {
     mat_fill_rand(rx, -5.0f, 5.0f);
     mat_fill_rand(rg, -1.0f, 1.0f);
     mat_softmax(ry, rx);
- 
+
     gc_ctx ctx = { .x = rx, .out = mat_create(a, R, C), .g = rg };
     gc_numeric_grad(rx, softmax_loss, &ctx, GC_H, nu);
     CHECK(mat_softmax_add_grad(an, ry, rg));
     f64 err = gc_max_error(an, nu);
     printf("    softmax: max error vs finite differences = %.2e\n", err);
     CHECK(err < GC_TOLERANCE);
- 
+
     arena_destroy(a);
 }
 
-
+// ---------------------------------------------------------------------------
+// mat_cross_entropy_add_grad
+// ---------------------------------------------------------------------------
 static void test_cross_entropy_grad(void) {
     mem_arena* a = arena_create(MiB(4), MiB(1));
     if (!a) { CHECK(a != NULL); return; }
- 
+
     matrix* p = mat_create(a, 1, 3);
     matrix* q = mat_create(a, 1, 3);
     matrix* g = mat_create(a, 1, 3);
@@ -969,7 +1025,7 @@ static void test_cross_entropy_grad(void) {
     set(p, pv, 3);
     set(q, qv, 3);
     mat_fill(g, 1.0f);
- 
+
     // dq = -p/q = [0, -1/0.7, 0];  dp = -ln(q) = [1.6094379, 0.3566749, 2.3025851]
     CHECK(mat_cross_entropy_add_grad(dp, dq, p, q, g));
     CHECK_NEAR(dq->data[0],  0.0,        1e-9);
@@ -978,21 +1034,21 @@ static void test_cross_entropy_grad(void) {
     CHECK_NEAR(dp->data[0],  1.6094379,  1e-6);
     CHECK_NEAR(dp->data[1],  0.3566749,  1e-6);
     CHECK_NEAR(dp->data[2],  2.3025851,  1e-6);
- 
+
     // The upstream gradient scales the result.
     matrix* g3 = mat_create(a, 1, 3);
     mat_fill(g3, 3.0f);
     matrix* dq3 = mat_create(a, 1, 3);
     CHECK(mat_cross_entropy_add_grad(NULL, dq3, p, q, g3));
     CHECK_NEAR(dq3->data[1], -3.0 * 1.4285714, 1e-5);
- 
+
     // Either gradient (or both) may be NULL; labels usually need no gradient.
     CHECK(mat_cross_entropy_add_grad(NULL, dq, p, q, g));
     CHECK(mat_cross_entropy_add_grad(dp, NULL, p, q, g));
     CHECK(mat_cross_entropy_add_grad(NULL, NULL, p, q, g));
     CHECK_NEAR(dq->data[1], -2.0 * 1.4285714, 1e-5);  // the NULL-p call accumulated once more
     CHECK_NEAR(dp->data[0],  2.0 * 1.6094379, 1e-5);  // the NULL-q call accumulated once more
- 
+
     // q = 0: the gradient must stay finite (the denominator is clamped), not -inf or NaN.
     matrix* pz = mat_create(a, 1, 2);
     matrix* qz = mat_create(a, 1, 2);
@@ -1004,7 +1060,7 @@ static void test_cross_entropy_grad(void) {
     CHECK(dz->data[0] == 0.0f);                       // target 0: no gradient, and not NaN
     CHECK(!isnan(dz->data[1]) && !isinf(dz->data[1]));
     CHECK_NEAR(dz->data[1] / -1e7, 1.0, 1e-4);        // -p / MAT_LOG_EPS
- 
+
     // Shape mismatches: false, and NOTHING is written (even to the matrices that did match).
     matrix* wrong = mat_create(a, 3, 1);
     matrix* dp_clean = mat_create(a, 1, 3);
@@ -1014,7 +1070,7 @@ static void test_cross_entropy_grad(void) {
     CHECK(!mat_cross_entropy_add_grad(wrong, dq_clean, p, q, g));
     CHECK(dq_clean->data[1] == 0.0f);
     CHECK(!mat_cross_entropy_add_grad(NULL, NULL, p, q, wrong));
- 
+
     // Finite differences, for BOTH inputs. p in [0,1], q in [0.2, 0.95] (away from the clamp).
     prng_seed(13, 1);
     u32 R = 4, C = 7;
@@ -1027,23 +1083,61 @@ static void test_cross_entropy_grad(void) {
     mat_fill_rand(rq, 0.2f, 0.95f);
     mat_fill_rand(rg, -1.0f, 1.0f);
     gc_ctx ctx = { .out = mat_create(a, R, C), .g = rg, .p = rp, .q = rq };
- 
+
     gc_numeric_grad(rq, ce_loss, &ctx, GC_H, nu);
     CHECK(mat_cross_entropy_add_grad(NULL, an, rp, rq, rg));
     f64 err_q = gc_max_error(an, nu);
- 
+
     mat_clear(an);
     gc_numeric_grad(rp, ce_loss, &ctx, GC_H, nu);
     CHECK(mat_cross_entropy_add_grad(an, NULL, rp, rq, rg));
     f64 err_p = gc_max_error(an, nu);
- 
+
     printf("    cross-entropy: max error vs finite differences: dq %.2e, dp %.2e\n", err_q, err_p);
     CHECK(err_q < GC_TOLERANCE);
     CHECK(err_p < GC_TOLERANCE);
- 
+
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// Softmax followed by cross-entropy: the famous simplification dL/dx = y - p
+// ---------------------------------------------------------------------------
+static void test_softmax_cross_entropy_chain(void) {
+    mem_arena* a = arena_create(MiB(4), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+
+    // Chaining the two backward functions exactly as the autograd engine will:
+    // cost -> cross_entropy -> softmax -> logits. With one-hot labels and an upstream gradient of 1
+    // on every cost element, the logit gradient collapses to (softmax output - labels).
+    u32 R = 3, C = 5;
+    matrix* x = mat_create(a, R, C);                  // logits
+    matrix* y = mat_create(a, R, C);                  // softmax output
+    matrix* p = mat_create(a, R, C);                  // one-hot labels
+    matrix* ones = mat_create(a, R, C);
+    matrix* dy = mat_create(a, R, C);                 // gradient arriving at the softmax output
+    matrix* dx = mat_create(a, R, C);                 // gradient at the logits
+
+    prng_seed(14, 1);
+    mat_fill_rand(x, -3.0f, 3.0f);
+    mat_fill(ones, 1.0f);
+    for (u32 r = 0; r < R; r++) { p->data[r * C + (r * 2 + 1) % C] = 1.0f; }
+
+    CHECK(mat_softmax(y, x));
+    CHECK(mat_cross_entropy_add_grad(NULL, dy, p, y, ones));   // dy = -p / y
+    CHECK(mat_softmax_add_grad(dx, y, dy));                    // dx = y * (dy - sum(dy * y))
+
+    b32 matches = true;
+    for (u32 i = 0; i < R * C; i++) {
+        f32 expected = y->data[i] - p->data[i];
+        if (fabsf(dx->data[i] - expected) > 1e-5f) { matches = false; }
+    }
+    CHECK(matches);
+
+    arena_destroy(a);
+}
+
+// ---------------------------------------------------------------------------
 
 int main(void) {
     RUN_TEST(test_create);
@@ -1065,6 +1159,7 @@ int main(void) {
     RUN_TEST(test_relu_grad);
     RUN_TEST(test_softmax_grad);
     RUN_TEST(test_cross_entropy_grad);
+    RUN_TEST(test_softmax_cross_entropy_chain);
 
     return test_summary();
 }
