@@ -251,6 +251,67 @@ b32 mat_cross_entropy(matrix* out, const matrix* p, const matrix* q) {
     return true;
 }
 
-// mat_relu_add_grad, mat_softmax_add_grad, mat_cross_entropy_add_grad:
-// declared in matrix.h, defined in Week 3.
+b32 mat_relu_add_grad(matrix* out, const matrix* in, const matrix* grad){
+    if(!mat_same_shape(out,in) || !mat_same_shape(out,grad)){
+        return false;
+    }
+    u64 n = mat_count(out);
+    for(u64 i=0; i<n; i++){
+        if(in->data[i]>0.0f){
+            out->data[i]+=grad->data[i];
+        }
+    }
+    return true;
+}
 
+b32 mat_softmax_add_grad(matrix* out, const matrix* softmax_out, const matrix* grad){
+    if(!mat_same_shape(out,softmax_out) || !mat_same_shape(out,grad)){
+        return false;
+    }
+
+    for(u32 r=0; r<out->rows; r++){
+        const f32* y = softmax_out->data + (u64)r*out->cols;
+        const f32* g = grad->data + (u64)r * out->cols;
+        f32* o=out->data + (u64)r*out->cols;
+
+        f64 dot = 0.0;
+        for(u32 c=0; c<out->cols; c++){
+            dot+=(f64)g[c]*(f64)y[c];
+        }
+
+        for(u32 c=0; c<out->cols; c++){
+            o[c]+=y[c]*(g[c]-(f32)dot);
+        }
+    }
+    return true;
+}
+
+b32 mat_cross_entropy_add_grad(matrix* p_grad, matrix* q_grad, const matrix* p, const matrix* q, const matrix* grad){
+    if(!mat_same_shape(p,q) || !mat_same_shape(p,grad)){
+        return false;
+    }
+    if(p_grad && !mat_same_shape(p,p_grad)){
+        return false;
+    }
+    if(q_grad && !mat_same_shape(p,q_grad)){
+        return false;
+    }
+
+    u64 n=mat_count(p);
+    for(u64 i=0; i<n; i++){
+        f32 qi = q->data[i];
+        if(qi<MAT_LOG_EPS){
+            qi=MAT_LOG_EPS;
+        }
+        f32 g=grad->data[i];
+
+        if(p_grad){
+            p_grad->data[i]+=g*-logf(qi);
+        }
+        if(q_grad){
+            q_grad->data[i]+=g*-p->data[i]/qi;
+        }
+    }
+
+    return true;
+}
