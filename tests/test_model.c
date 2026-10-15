@@ -266,3 +266,124 @@ static void test_requires_grad(void) {
     arena_destroy(a);
 }
 
+static void test_prog_order(void) {
+    mem_arena* a = arena_create(MiB(4), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+ 
+    mlp g;
+    REQUIRE(build_mlp(a, &g, 4, 6, 5, 3));
+    model_compile(a, g.m);
+ 
+    // Post-order DFS from the cost, visiting inputs[0] before inputs[1]. For
+    // cost = cross_entropy(labels, y), it visits `labels` first, then the whole chain below y.
+    model_var* expected_cost[] = { g.labels, g.x, g.w1, g.h, g.a, g.w2, g.z, g.y, g.cost };
+    CHECK(program_equals(&g.m->cost_prog, expected_cost, 9));
+    CHECK(is_topological(&g.m->cost_prog));
+ 
+    // The forward program needs only what `output` depends on: no labels, no cost.
+    model_var* expected_fwd[] = { g.x, g.w1, g.h, g.a, g.w2, g.z, g.y };
+    CHECK(program_equals(&g.m->forward_prog, expected_fwd, 7));
+    CHECK(is_topological(&g.m->forward_prog));
+ 
+    arena_destroy(a);
+}
+ 
+static void test_prog_shapes_of_graphs(void) {
+    mem_arena* a = arena_create(MiB(4), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+    model_context* m = model_create(a);
+ 
+    // Fan-out: x is used twice (directly, and through relu). It must appear ONCE.
+    model_var* x = mv_create(a, m, 2, 3, MV_FLAG_NONE);
+    model_var* r = mv_relu(a, m, x, MV_FLAG_NONE);
+    model_var* s = mv_add(a, m, r, x, MV_FLAG_NONE);
+ 
+    model_program p = model_prog_create(a, m, s);
+    model_var* expect1[] = { x, r, s };
+    CHECK(program_equals(&p, expect1, 3));
+    CHECK(is_topological(&p));
+ 
+    // Diamond: one source feeding two branches that meet again.
+    model_var* src = mv_create(a, m, 2, 3, MV_FLAG_NONE);
+    model_var* b1 = mv_relu(a, m, src, MV_FLAG_NONE);
+    model_var* b2 = mv_softmax(a, m, src, MV_FLAG_NONE);
+    model_var* join = mv_add(a, m, b1, b2, MV_FLAG_NONE);
+    model_program d = model_prog_create(a, m, join);
+    model_var* expect2[] = { src, b1, b2, join };
+    CHECK(program_equals(&d, expect2, 4));
+    CHECK(is_topological(&d));
+ 
+    // Pruning: x, r, s and the whole diamond exist in the model, yet a program for `b1` contains
+    // only src and b1.
+    model_program only_b1 = model_prog_create(a, m, b1);
+    model_var* expect3[] = { src, b1 };
+    CHECK(program_equals(&only_b1, expect3, 2));
+ 
+    // A leaf alone is a program of one.
+    model_program leaf = model_prog_create(a, m, x);
+    model_var* expect4[] = { x };
+    CHECK(program_equals(&leaf, expect4, 1));
+ 
+    // Degenerate inputs give an empty program, not a crash.
+    model_program none = model_prog_create(a, m, NULL);
+    CHECK(none.size == 0 && none.vars == NULL);
+ 
+    // A variable that cannot belong to the model is refused instead of indexing out of bounds.
+    // First: a model with no variables at all.
+    model_context* empty = model_create(a);
+    scrub_scratch();
+    model_program from_empty = model_prog_create(a, empty, x);
+    CHECK(from_empty.size == 0 && from_empty.vars == NULL);
+ 
+    // Second: a model with one variable, asked about a variable whose index is beyond that
+    // (`join` was the 7th variable created in `m`, so its index is 6).
+    model_context* tiny = model_create(a);
+    mv_create(a, tiny, 1, 1, MV_FLAG_NONE);
+    scrub_scratch();
+    model_program foreign = model_prog_create(a, tiny, join);
+    CHECK(join->index >= tiny->num_vars);
+    CHECK(foreign.size == 0 && foreign.vars == NULL);
+ 
+    // A long chain (depth 500): sorted in order, no duplicates, nothing lost.
+    model_var* v = mv_create(a, m, 1, 4, MV_FLAG_NONE);
+    model_var* first = v;
+    for (u32 i = 0; i < 500; i++) {
+        v = mv_relu(a, m, v, MV_FLAG_NONE);
+    }
+    model_program chain = model_prog_create(a, m, v);
+    REQUIRE(chain.size == 501);
+    CHECK(chain.vars[0] == first && chain.vars[500] == v);
+    CHECK(is_topological(&chain));
+ 
+    arena_destroy(a);
+}
+ 
+// A program must cost the arena exactly its own array: the sorting work space lives in a
+// scratch arena that is handed back afterwards.
+static void test_prog_memory(void) {
+    mem_arena* a = arena_create(MiB(4), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+ 
+    mlp g;
+    REQUIRE(build_mlp(a, &g, 4, 6, 5, 3));
+ 
+    u64 pos_before = a->pos;
+    model_program p = model_prog_create(a, g.m, g.cost);
+    CHECK(p.size == 9);
+    CHECK(a->pos == ALIGN_UP_POW2(pos_before, ARENA_ALIGN) + 9 * sizeof(model_var*));
+ 
+    // Same for a program smaller than the whole model (7 of 9 variables): the array must be
+    // sized by what is reachable, not by how many variables exist.
+    pos_before = a->pos;
+    model_program fwd = model_prog_create(a, g.m, g.y);
+    CHECK(fwd.size == 7);
+    CHECK(a->pos == ALIGN_UP_POW2(pos_before, ARENA_ALIGN) + 7 * sizeof(model_var*));
+ 
+    // Nothing was left behind in the scratch arena either.
+    mem_arena_temp s = arena_scratch_get(NULL, 0);
+    CHECK(s.arena != NULL);
+    CHECK(s.start_pos == ARENA_BASE_POS);
+    arena_scratch_release(s);
+ 
+    arena_destroy(a);
+}

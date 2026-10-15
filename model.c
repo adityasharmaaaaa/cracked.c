@@ -151,3 +151,52 @@ model_var* mv_cross_entropy(
     if (p == NULL || q == NULL || !mv_same_shape(p, q)) { return NULL; }
     return mv_op(arena, model, MV_OP_CROSS_ENTROPY, p->val->rows, p->val->cols, flags, p, q);
 }
+
+typedef struct {
+    model_var** order;      // output: variables in dependency order
+    u8* visited;            // indexed by model_var::index
+    u32 count;
+} topo_state;
+ 
+static void topo_visit(topo_state* st, model_var* var) {
+    if (st->visited[var->index]) { return; }       // already placed (a variable used twice appears once)
+    st->visited[var->index] = 1;
+ 
+    //first everything this variable depends on
+    for (u32 i = 0; i < (u32)MV_NUM_INPUTS(var->op); i++) {
+        topo_visit(st, var->inputs[i]);
+    }
+ 
+    //then the variable itself: post-order puts every variable AFTER all of its inputs.
+    st->order[st->count++] = var;
+}
+ 
+model_program model_prog_create(
+    mem_arena* arena, model_context* model, model_var* out_var
+) {
+    model_program prog = { 0 };
+    if (out_var == NULL || out_var->index >= model->num_vars) { return prog; }
+ 
+    mem_arena_temp scratch = arena_scratch_get(&arena, 1);
+    if (scratch.arena == NULL) { return prog; }
+ 
+    topo_state st = {
+        .order   = PUSH_ARRAY(scratch.arena, model_var*, model->num_vars),
+        .visited = PUSH_ARRAY(scratch.arena, u8, model->num_vars),     // zeroed: nothing visited
+        .count   = 0,
+    };
+ 
+    if (st.order && st.visited) {
+        topo_visit(&st, out_var);
+ 
+        model_var** vars = PUSH_ARRAY(arena, model_var*, st.count);
+        if (vars) {
+            memcpy(vars, st.order, st.count * sizeof(model_var*));
+            prog.vars = vars;
+            prog.size = st.count;
+        }
+    }
+ 
+    arena_scratch_release(scratch);
+    return prog;
+}
