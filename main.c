@@ -9,3 +9,4 @@
 #include "arena.c"
 #include "prng.c"
 #include "matrix.c"
+#include "model.c"

@@ -12,6 +12,18 @@ static int g_failed = 0;
         }                                                                   \
     } while (0)
  
+#define REQUIRE(cond)                                                       \
+    do {                                                                    \
+        g_checks++;                                                         \
+        if (!(cond)) {                                                      \
+            g_failed++;                                                     \
+            printf("    FAIL %s:%d: %s (fatal: test stopped)\n",            \
+                   __FILE__, __LINE__, #cond);                              \
+            return;                                                         \
+        }                                                                   \
+    } while (0)
+
+
 #define CHECK_NEAR(a, b, eps)                                               \
     do {                                                                    \
         double check_a_ = (a), check_b_ = (b);                              \
