@@ -160,3 +160,109 @@ static void test_roles(void) {
  
     arena_destroy(a);
 }
+
+static void test_mv_shapes(void) {
+    mem_arena* a = arena_create(MiB(4), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+    model_context* m = model_create(a);
+ 
+    model_var* x43 = mv_create(a, m, 4, 3, MV_FLAG_NONE);
+    model_var* y43 = mv_create(a, m, 4, 3, MV_FLAG_NONE);
+    model_var* z34 = mv_create(a, m, 3, 4, MV_FLAG_NONE);   // SAME element count as 4x3
+    model_var* w35 = mv_create(a, m, 3, 5, MV_FLAG_NONE);
+ 
+    // Unary ops keep the shape and record their input.
+    model_var* r = mv_relu(a, m, x43, MV_FLAG_NONE);
+    REQUIRE(r != NULL);
+    CHECK(r->val->rows == 4 && r->val->cols == 3);
+    CHECK(r->op == MV_OP_RELU && r->inputs[0] == x43 && r->inputs[1] == NULL);
+    model_var* s = mv_softmax(a, m, x43, MV_FLAG_NONE);
+    REQUIRE(s != NULL);
+    CHECK(s->val->rows == 4 && s->val->cols == 3 && s->op == MV_OP_SOFTMAX);
+ 
+    // Binary elementwise ops need IDENTICAL shapes (4x3 vs 3x4 must be rejected).
+    model_var* sum = mv_add(a, m, x43, y43, MV_FLAG_NONE);
+    REQUIRE(sum != NULL);
+    CHECK(sum->op == MV_OP_ADD && sum->inputs[0] == x43 && sum->inputs[1] == y43);
+    model_var* dif = mv_sub(a, m, x43, y43, MV_FLAG_NONE);
+    REQUIRE(dif != NULL);
+    CHECK(dif->op == MV_OP_SUB);
+ 
+    // Matmul: (4x3) * (3x5) = (4x5). The inner dimensions must agree.
+    model_var* mm = mv_matmul(a, m, x43, w35, MV_FLAG_NONE);
+    REQUIRE(mm != NULL);
+    CHECK(mm->val->rows == 4 && mm->val->cols == 5 && mm->op == MV_OP_MATMUL);
+ 
+    // Cross-entropy: same shape as its inputs.
+    model_var* ce = mv_cross_entropy(a, m, x43, y43, MV_FLAG_NONE);
+    REQUIRE(ce != NULL);
+    CHECK(ce->val->rows == 4 && ce->val->cols == 3 && ce->op == MV_OP_CROSS_ENTROPY);
+    CHECK(ce->inputs[0] == x43 && ce->inputs[1] == y43);    // p first, q second
+ 
+    // Baseline AFTER all the successes; now every failure below must leave it untouched.
+    u64 pos_before = a->pos;
+    u32 vars_before = m->num_vars;
+ 
+    CHECK(mv_add(a, m, x43, z34, MV_FLAG_NONE) == NULL);
+    CHECK(mv_sub(a, m, x43, z34, MV_FLAG_NONE) == NULL);
+    CHECK(mv_cross_entropy(a, m, x43, z34, MV_FLAG_NONE) == NULL);
+    CHECK(mv_matmul(a, m, x43, y43, MV_FLAG_NONE) == NULL);     // (4x3) * (4x3)
+    CHECK(mv_matmul(a, m, w35, x43, MV_FLAG_NONE) == NULL);     // (3x5) * (4x3)
+ 
+    // NULL inputs are rejected, not dereferenced.
+    CHECK(mv_relu(a, m, NULL, MV_FLAG_NONE) == NULL);
+    CHECK(mv_softmax(a, m, NULL, MV_FLAG_NONE) == NULL);
+    CHECK(mv_add(a, m, x43, NULL, MV_FLAG_NONE) == NULL);
+    CHECK(mv_matmul(a, m, NULL, w35, MV_FLAG_NONE) == NULL);
+ 
+    // Every failure above left the model and the arena exactly as they were.
+    CHECK(m->num_vars == vars_before);
+    CHECK(a->pos == pos_before);
+ 
+    arena_destroy(a);
+}
+ 
+// ---------------------------------------------------------------------------
+// REQUIRES_GRAD propagation
+// ---------------------------------------------------------------------------
+static void test_requires_grad(void) {
+    mem_arena* a = arena_create(MiB(4), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+    model_context* m = model_create(a);
+ 
+    model_var* x      = mv_create(a, m, 4, 3, MV_FLAG_NONE);        // no gradient
+    model_var* x2     = mv_create(a, m, 4, 3, MV_FLAG_NONE);        // no gradient
+    model_var* w      = mv_create(a, m, 3, 2, MV_FLAG_PARAMETER);   // gradient
+ 
+    // Nothing upstream needs a gradient -> this node needs none, and has no gradient matrix.
+    model_var* r = mv_relu(a, m, x, MV_FLAG_NONE);
+    REQUIRE(r != NULL);
+    CHECK(!(r->flags & MV_FLAG_REQUIRES_GRAD) && r->grad == NULL);
+    model_var* s = mv_add(a, m, x, x2, MV_FLAG_NONE);
+    REQUIRE(s != NULL);
+    CHECK(s->grad == NULL);
+ 
+    // A parameter upstream -> the gradient must flow THROUGH this node, so it needs one.
+    model_var* mm = mv_matmul(a, m, x, w, MV_FLAG_NONE);
+    REQUIRE(mm != NULL);
+    CHECK(mm->flags & MV_FLAG_REQUIRES_GRAD);
+    REQUIRE(mm->grad != NULL);
+    CHECK(mm->grad->rows == 4 && mm->grad->cols == 2);
+ 
+    // It keeps propagating down the chain.
+    model_var* act = mv_relu(a, m, mm, MV_FLAG_NONE);
+    CHECK(act != NULL && act->grad != NULL);
+ 
+    // Either input is enough: labels (no gradient) with a prediction that needs one.
+    model_var* labels = mv_create(a, m, 4, 2, MV_FLAG_DESIRED_OUTPUT);
+    model_var* ce = mv_cross_entropy(a, m, labels, act, MV_FLAG_NONE);
+    CHECK(ce != NULL && ce->grad != NULL);
+    CHECK(labels->grad == NULL);                      // the labels themselves still have none
+ 
+    // Same, with the requiring input in the first position.
+    model_var* sub = mv_sub(a, m, act, labels, MV_FLAG_NONE);
+    CHECK(sub != NULL && sub->grad != NULL);
+ 
+    arena_destroy(a);
+}
+
