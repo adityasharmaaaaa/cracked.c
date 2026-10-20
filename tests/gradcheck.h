@@ -33,7 +33,7 @@ typedef f64 (*gc_loss_fn)(void* ctx);
 #define GC_TOLERANCE 1e-3
 
 // numeric[i] = central-difference estimate of dL/dx[i]. x is restored before returning.
-static void gc_numeric_grad(matrix* x, gc_loss_fn loss, void* ctx, f32 h, matrix* numeric) {
+static inline void gc_numeric_grad(matrix* x, gc_loss_fn loss, void* ctx, f32 h, matrix* numeric) {
     u64 n = (u64)x->rows * x->cols;
     for (u64 i = 0; i < n; i++) {
         f32 original = x->data[i];
@@ -52,7 +52,7 @@ static void gc_numeric_grad(matrix* x, gc_loss_fn loss, void* ctx, f32 h, matrix
 // Largest mismatch between two gradients, as a RELATIVE error with a floor, so that tiny
 // gradients (near 0) are not judged by a ratio of two noise values:
 //     |a - n| / (1 + max(|a|, |n|))
-static f64 gc_max_error(const matrix* analytic, const matrix* numeric) {
+static inline f64 gc_max_error(const matrix* analytic, const matrix* numeric) {
     f64 worst = 0.0;
     u64 n = (u64)analytic->rows * analytic->cols;
     for (u64 i = 0; i < n; i++) {
@@ -66,7 +66,7 @@ static f64 gc_max_error(const matrix* analytic, const matrix* numeric) {
 }
 
 // sum_i g[i] * m[i], accumulated in f64.
-static f64 gc_weighted_sum(const matrix* m, const matrix* g) {
+static inline f64 gc_weighted_sum(const matrix* m, const matrix* g) {
     f64 sum = 0.0;
     u64 n = (u64)m->rows * m->cols;
     for (u64 i = 0; i < n; i++) {

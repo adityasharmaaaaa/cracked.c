@@ -779,6 +779,122 @@ static void test_backward_fanout(void) {
     arena_destroy(a);
 }
 
+// The big one: for whole networks, backprop must agree with measured derivatives of the loss
+// for EVERY parameter (and the input). Shapes are deliberately all different and non-square:
+// a square network would hide a transposed matmul.
+static void test_backward_finite_differences(void) {
+    u32 configs[][4] = {            // batch, in, hidden, out
+        { 4, 6, 5, 3 },
+        { 1, 3, 8, 2 },
+        { 7, 5, 2, 4 },
+        { 3, 9, 4, 6 },
+    };
+    f64 worst = 0.0;
+
+    for (u32 c = 0; c < sizeof(configs) / sizeof(configs[0]); c++) {
+        u32 batch = configs[c][0], in = configs[c][1], hid = configs[c][2], out = configs[c][3];
+
+        mem_arena* a = arena_create(MiB(8), MiB(1));
+        if (!a) { CHECK(a != NULL); return; }
+
+        mlp g;
+        // The input also gets a gradient here, so dL/dx is checked as well.
+        REQUIRE(build_mlp_ex(a, &g, batch, in, hid, out, MV_FLAG_INPUT | MV_FLAG_REQUIRES_GRAD));
+        model_compile(a, g.m);
+        REQUIRE(randomize_mlp(&g, 1000 + 10 * c));
+
+        model_prog_compute(&g.m->cost_prog);
+        model_prog_compute_grads(&g.m->cost_prog);
+
+        model_var* params[] = { g.w1, g.w2, g.x };
+        for (u32 i = 0; i < 3; i++) {
+            model_var* p = params[i];
+            REQUIRE(p->grad != NULL);
+
+            matrix* numeric = mat_create(a, p->val->rows, p->val->cols);
+            gc_numeric_grad(p->val, cost_sum_loss, g.m, GC_H, numeric);
+            f64 err = gc_max_error(p->grad, numeric);
+            if (err > worst) { worst = err; }
+            CHECK(err < GC_TOLERANCE);
+        }
+
+        arena_destroy(a);
+    }
+    printf("    whole-network gradient check (4 shapes, w1 + w2 + input): worst error = %.2e\n", worst);
+}
+
+// Both inputs of a cross-entropy node can need gradients (the labels usually do not).
+static void test_backward_cross_entropy_both(void) {
+    mem_arena* a = arena_create(MiB(4), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+
+    model_context* m = model_create(a);
+    model_var* z    = mv_create(a, m, 3, 4, MV_FLAG_PARAMETER);
+    model_var* q    = mv_softmax(a, m, z, MV_FLAG_OUTPUT);
+    model_var* p    = mv_create(a, m, 3, 4, MV_FLAG_PARAMETER);       // a "label" that needs a gradient
+    model_var* cost = mv_cross_entropy(a, m, p, q, MV_FLAG_COST);
+    REQUIRE(z && q && p && cost);
+    model_compile(a, m);
+
+    prng_seed(77, 7);
+    mat_fill_rand(z->val, -1.0f, 1.0f);
+    mat_fill_rand(p->val, 0.1f, 0.9f);
+
+    model_prog_compute(&m->cost_prog);
+    model_prog_compute_grads(&m->cost_prog);
+
+    f64 worst = 0.0;
+    model_var* both[] = { z, p };
+    for (u32 i = 0; i < 2; i++) {
+        matrix* numeric = mat_create(a, both[i]->val->rows, both[i]->val->cols);
+        gc_numeric_grad(both[i]->val, cost_sum_loss, m, GC_H, numeric);
+        f64 err = gc_max_error(both[i]->grad, numeric);
+        if (err > worst) { worst = err; }
+        CHECK(err < GC_TOLERANCE);
+    }
+    printf("    cross-entropy with gradients on both p and q: worst error = %.2e\n", worst);
+
+    // Only p needs a gradient; q is a constant (no gradient at all). The p gradient is still
+    // computed: dL/dp = -ln(q).
+    {
+        model_context* m2 = model_create(a);
+        model_var* p2 = mv_create(a, m2, 1, 3, MV_FLAG_PARAMETER);
+        model_var* q2 = mv_create(a, m2, 1, 3, MV_FLAG_INPUT);
+        model_var* c2 = mv_cross_entropy(a, m2, p2, q2, MV_FLAG_COST);
+        REQUIRE(p2 && q2 && c2);
+        f32 pv[] = { 0.5f, 0.25f, 0.25f };
+        f32 qv[] = { 0.2f, 0.7f, 0.1f };
+        fill_from(p2->val, pv, 3);
+        fill_from(q2->val, qv, 3);
+        model_compile(a, m2);
+        model_prog_compute(&m2->cost_prog);
+        model_prog_compute_grads(&m2->cost_prog);
+        CHECK(q2->grad == NULL);
+        CHECK_NEAR(p2->grad->data[0], 1.6094379, 1e-6);       // -ln(0.2)
+        CHECK_NEAR(p2->grad->data[1], 0.3566749, 1e-6);       // -ln(0.7)
+        CHECK_NEAR(p2->grad->data[2], 2.3025851, 1e-6);       // -ln(0.1)
+    }
+
+    arena_destroy(a);
+}
+
+// Plain SGD: for every parameter, w -= step * grad. `step` is learning_rate / batch_size: the
+// backward pass differentiates the SUM of the cost, so dividing by the batch size turns it into
+// the gradient of the MEAN loss, and the learning rate no longer depends on the batch size.
+static void sgd_step(model_program* prog, f32 step) {
+    for (u32 i = 0; i < prog->size; i++) {
+        model_var* v = prog->vars[i];
+        if (!(v->flags & MV_FLAG_PARAMETER)) { continue; }
+
+        u64 n = (u64)v->val->rows * v->val->cols;
+        for (u64 j = 0; j < n; j++) {
+            v->val->data[j] -= step * v->grad->data[j];
+        }
+    }
+}
+
+
+// ---------------------------------------------------------------------------
 
 int main(void) {
     RUN_TEST(test_mv_create);
@@ -794,5 +910,8 @@ int main(void) {
     RUN_TEST(test_backward_known);
     RUN_TEST(test_backward_zeroing);
     RUN_TEST(test_backward_fanout);
+    RUN_TEST(test_backward_finite_differences);
+    RUN_TEST(test_backward_cross_entropy_both);
+
     return test_summary();
 }
