@@ -1,3 +1,35 @@
+// model.h
+//
+// A static computation graph with automatic differentiation.
+//
+// You build the graph ONCE with mv_* calls. Each call creates a variable, allocates its value
+// (and gradient) matrix from the arena, and records which op produced it and from which inputs.
+// Nothing is allocated again while training: the same matrices are overwritten every step.
+//
+//     model_context* m = model_create(arena);
+//     model_var* x  = mv_create(arena, m, batch, 784, MV_FLAG_INPUT);
+//     model_var* w1 = mv_create(arena, m, 784, 256, MV_FLAG_PARAMETER);
+//     model_var* h  = mv_relu(arena, m, mv_matmul(arena, m, x, w1, MV_FLAG_NONE), MV_FLAG_NONE);
+//     ...
+//     model_compile(arena, m);        // topologically sort the graph into programs
+//     model_feedforward(m);           // run the forward program on whatever is in m->input->val
+//
+// Rules:
+//   * A variable can only use inputs that already exist, so the graph is a DAG by construction.
+//   * Every constructor checks shapes. On any failure it returns NULL, leaves the model unchanged
+//     (num_vars, roles) and gives back the arena space it had taken.
+//   * The result of an op requires a gradient if ANY of its inputs does.
+//     MV_FLAG_PARAMETER implies MV_FLAG_REQUIRES_GRAD.
+//   * The roles INPUT, OUTPUT, DESIRED_OUTPUT and COST may each be given to at most one variable
+//     per model; the model remembers it in model->input / output / desired_output / cost.
+//   * All variables in one graph must come from the same model_context and arena.
+//
+// Layout convention (same as matrix.h): one ROW per sample.
+//
+// Known limitation: no bias term yet. mv_add needs two matrices of identical shape, so adding a
+// 1 x n bias row to a batch x n matrix (broadcasting) is not expressible. A bias-free MLP still
+// learns MNIST; broadcasting comes later.
+
 #pragma once
 
 typedef enum {
@@ -123,7 +155,19 @@ model_program model_prog_create(
 // Forward pass: computes every non-leaf variable of the program, front to back.
 void model_prog_compute(model_program* prog);
 
-// Backward pass: back to front, accumulating into the gradients. (Friday.)
+// Backward pass. Call model_prog_compute on the SAME program first (backward reuses the forward
+// values). Then:
+//   1. every gradient in the program is zeroed,
+//   2. the program's last variable (the one it computes, e.g. the cost) is seeded with a gradient
+//      of 1.0 in every element, i.e. we differentiate the SUM of its elements,
+//   3. the program is walked back to front, each op adding its contribution to its inputs' grads.
+// Afterwards every variable that requires a gradient holds d(sum of the root)/d(variable).
+//
+// Batch averaging is NOT done here: for a mean loss over `rows` samples, the optimizer scales the
+// update by 1 / rows (equivalently, learning_rate / batch_size).
+//
+// The root must require a gradient (some PARAMETER or REQUIRES_GRAD variable upstream), otherwise
+// there is nothing to compute and the program aborts with a message.
 void model_prog_compute_grads(model_program* prog);
 
 // ---- the model -----------------------------------------------------------------------
