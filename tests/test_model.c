@@ -893,6 +893,59 @@ static void sgd_step(model_program* prog, f32 step) {
     }
 }
 
+// The classic end-to-end sanity check: a correct network must be able to memorise 8 samples.
+// If forward, backward, or the update were wrong anywhere, the loss would not go to ~0.
+static void test_overfit_tiny_batch(void) {
+    mem_arena* a = arena_create(MiB(8), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+
+    u32 batch = 8, in = 6, hid = 16, out = 3;
+    mlp g;
+    REQUIRE(build_mlp(a, &g, batch, in, hid, out));
+    model_compile(a, g.m);
+
+    prng_seed(2024, 9);
+    mat_fill_rand(g.x->val, -1.0f, 1.0f);
+    mat_fill_rand(g.w1->val, -0.5f, 0.5f);
+    mat_fill_rand(g.w2->val, -0.5f, 0.5f);
+    for (u32 r = 0; r < batch; r++) {
+        g.labels->val->data[r * out + (prng_rand() % out)] = 1.0f;     // random class per sample
+    }
+
+    f32 loss_at[301];
+    for (u32 step = 0; step <= 300; step++) {
+        model_prog_compute(&g.m->cost_prog);
+        loss_at[step] = mat_sum(g.cost->val) / (f32)batch;             // mean loss over the batch
+
+        model_prog_compute_grads(&g.m->cost_prog);
+        sgd_step(&g.m->cost_prog, 0.3f / (f32)batch);
+    }
+
+    // An untrained network knows nothing: loss ~ ln(number of classes) = ln 3 = 1.0986.
+    CHECK(fabsf(loss_at[0] - logf((f32)out)) < 0.15f);
+
+    // It then improves steadily...
+    CHECK(loss_at[10] < loss_at[0]);
+    CHECK(loss_at[50] < loss_at[10]);
+    CHECK(loss_at[100] < loss_at[50]);
+    printf("    loss: step 0 = %.4f, 10 = %.4f, 50 = %.4f, 100 = %.4f, 300 = %.4f\n",
+           loss_at[0], loss_at[10], loss_at[50], loss_at[100], loss_at[300]);
+
+    // ...and memorises the batch.
+    CHECK(loss_at[300] < 0.01f);
+
+    u32 correct = 0;
+    for (u32 r = 0; r < batch; r++) {
+        u32 best = 0;
+        for (u32 c = 1; c < out; c++) {
+            if (g.y->val->data[r * out + c] > g.y->val->data[r * out + best]) { best = c; }
+        }
+        if (g.labels->val->data[r * out + best] == 1.0f) { correct++; }
+    }
+    CHECK(correct == batch);
+
+    arena_destroy(a);
+}
 
 // ---------------------------------------------------------------------------
 
@@ -912,6 +965,7 @@ int main(void) {
     RUN_TEST(test_backward_fanout);
     RUN_TEST(test_backward_finite_differences);
     RUN_TEST(test_backward_cross_entropy_both);
+    RUN_TEST(test_overfit_tiny_batch);
 
     return test_summary();
 }
