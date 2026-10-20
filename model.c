@@ -257,8 +257,70 @@ void model_prog_compute(model_program* prog) {
 }
 
 void model_prog_compute_grads(model_program* prog) {
-    (void)prog;
-    MV_NOT_IMPLEMENTED();
+    if(prog->size == 0) { return ;}
+
+    //1.start from zero. gradients accumulate
+    //so anything left over from the previous step would be added to the new gradient
+    for(u32 i=0; i<prog->size; i++){
+        model_var* v = prog->vars[i];
+        if(v->grad) { mat_clear(v->grad); }
+    }
+
+    //2.seed. the last variable of a program is the one it computes(post-order puts the root
+    //last). its gradient is 1 everywhere: we differentiate the sum of its elements
+    //averaging over a batch is the optimizer's job: scale the update by 1/batch)
+
+    model_var* root = prog->vars[prog->size-1];
+    MV_CHECK(root->grad != NULL);
+    mat_fill(root->grad, 1.0f);
+
+    //walk the program backwards, every consumer of a variable comes after it in the program.
+    //so by the time we reach a variable all contributions to its gradient have arrived and
+    //it is complete, then it passes its gradient on to its own inputs
+    for(u32 i = prog->size; i-- > 0; ){
+        model_var* v = prog->vars[i];
+
+        //a variable without gradient has no input that needs one either: requires grad
+        //propagates forward through every op, so there is nothing to pass on
+        if(v->grad == NULL){ continue; }
+
+        model_var* a = v->inputs[0];
+        model_var* b = v->inputs[1];
+
+        switch(v->op) {
+            case MV_OP_NULL:
+            case MV_OP_CREATE:
+                break;
+            case MV_OP_RELU:
+                if(a->grad) { MV_CHECK(mat_relu_add_grad(a->grad, a->val, v->grad)); }
+                break;
+            case MV_OP_SOFTMAX:
+                if(a->grad) { MV_CHECK(mat_softmax_add_grad(a->grad, v->val, v->grad)); }
+                break;
+            case MV_OP_ADD:
+                if(a->grad) { MV_CHECK(mat_add(a->grad, a->grad, v->grad)); }
+                if(b->grad) { MV_CHECK(mat_add(b->grad, b->grad, v->grad)); }
+                break;
+            case MV_OP_SUB:
+                if(a->grad) { MV_CHECK(mat_add(a->grad, a->grad, v->grad)); }
+                if(b->grad) { MV_CHECK(mat_sub(b->grad, b->grad, v->grad)); }
+                break;
+            case MV_OP_MATMUL:
+                if(a->grad) { MV_CHECK(mat_mul(a->grad, v->grad, b->val, false, false, true)); }
+                if(b->grad) { MV_CHECK(mat_mul(b->grad, a->val, v->grad, false, true, false)); }
+                break;
+            case MV_OP_CROSS_ENTROPY:
+                if(a->grad || b->grad){
+                    MV_CHECK( mat_cross_entropy_add_grad(a->grad, b->grad, a->val, b->val, v->grad));
+                }
+                break;
+            
+            case _MV_OP_UNARY_START:
+            case _MV_OP_BINARY_START:
+            default:
+                MV_CHECK(!"invalid op in program");
+        }
+    }
 }
 
 model_context* model_create(mem_arena* arena) {
