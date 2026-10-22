@@ -20,7 +20,7 @@ RELEASE = -O2
 # silently miss a suite, and a runner that runs fewer tests than you think still says "green").
 TESTS = $(notdir $(basename $(wildcard tests/test_*.c)))
 
-DEPS = base.h arena.h arena.c prng.h prng.c matrix.h matrix.c timer.h tests/test.h
+DEPS = $(wildcard *.h *.c tests/*.h)
 
 # Benchmark settings. On macOS, compare against Apple's BLAS (Accelerate).
 # On Linux with OpenBLAS installed: make bench BLAS_DEFS=-DUSE_BLAS BLAS_LIBS=-lopenblas
