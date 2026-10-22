@@ -4,3 +4,4 @@ build/
 experiments/*
 !experiments/*.c
 .vscode
+data/
