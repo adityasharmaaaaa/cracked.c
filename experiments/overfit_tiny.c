@@ -19,20 +19,6 @@
 #include "matrix.c"
 #include "model.c"
 
-// w -= step * grad for every parameter. The backward pass gives the gradient of the SUM of the cost,
-// so the caller passes step = learning_rate / batch_size to get the gradient of the MEAN loss.
-static void sgd_step(model_program* prog, f32 step) {
-    for (u32 i = 0; i < prog->size; i++) {
-        model_var* v = prog->vars[i];
-        if (!(v->flags & MV_FLAG_PARAMETER)) { continue; }
-
-        u64 n = (u64)v->val->rows * v->val->cols;
-        for (u64 j = 0; j < n; j++) {
-            v->val->data[j] -= step * v->grad->data[j];
-        }
-    }
-}
-
 int main(void) {
     u32 batch = 8, in = 6, hidden = 16, classes = 3;
     f32 learning_rate = 0.3f;
@@ -66,7 +52,8 @@ int main(void) {
         if (step <= 5 || step % 25 == 0) { printf("%4u    %.4f\n", step, loss); }
 
         model_prog_compute_grads(&m->cost_prog);
-        sgd_step(&m->cost_prog, learning_rate / (f32)batch);
+        // The backward pass gives the gradient of the SUM of the cost, so step = learning_rate / batch_size.
+        model_sgd_step(&m->cost_prog, learning_rate / (f32)batch);
     }
 
     u32 correct = 0;
