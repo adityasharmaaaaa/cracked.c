@@ -354,6 +354,47 @@ void model_sgd_step(model_program* prog, f32 step) {
     }
 }
 
+// Evaluation
+ 
+static u32 row_argmax(const f32* row, u32 n) {
+    u32 best = 0;
+    for (u32 c = 1; c < n; c++) {
+        if (row[c] > row[best]) { best = c; }                // ties: the first maximum wins
+    }
+    return best;
+}
+ 
+f32 model_accuracy(model_context* model, const matrix* images, const matrix* labels) {
+    MV_CHECK(model->input && model->output && model->forward_prog.size > 0);
+    matrix* in  = model->input->val;
+    matrix* out = model->output->val;
+    MV_CHECK(images->cols == in->cols);
+    MV_CHECK(labels->cols == out->cols);
+    MV_CHECK(images->rows == labels->rows);
+ 
+    if (images->rows == 0) { return 0.0f; }
+ 
+    u32 batch = in->rows;
+    u64 correct = 0;
+ 
+    for (u32 start = 0; start < images->rows; start += batch) {
+        // The last batch may be partial: load only the rows that exist and count only those.
+        // (The remaining rows of the input keep old data, which is harmless: rows never mix.)
+        u32 count = MIN(batch, images->rows - start);
+        memcpy(in->data, images->data + (u64)start * in->cols, (u64)count * in->cols * sizeof(f32));
+ 
+        model_prog_compute(&model->forward_prog);
+ 
+        for (u32 r = 0; r < count; r++) {
+            u32 predicted = row_argmax(out->data + (u64)r * out->cols, out->cols);
+            u32 actual    = row_argmax(labels->data + (u64)(start + r) * labels->cols, labels->cols);
+            if (predicted == actual) { correct++; }
+        }
+    }
+    return (f32)((f64)correct / (f64)images->rows);
+}
+
+
 void model_train(
     model_context* model,
     const model_training_desc* training_desc
