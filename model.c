@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include "timer.h"
 
 // Internal-error check. The constructors validate every shape up front, so if a mat_* call
 // still fails while running a program, that is a bug in this file, not bad user input.
@@ -158,6 +159,9 @@ model_var* mv_cross_entropy(
     return mv_op(arena, model, MV_OP_CROSS_ENTROPY, p->val->rows, p->val->cols, flags, p, q);
 }
 
+// ---------------------------------------------------------------------------
+// Programs: topological sort by depth-first search, post-order
+// ---------------------------------------------------------------------------
 
 typedef struct {
     model_var** order;      // output: variables in dependency order
@@ -215,6 +219,9 @@ model_program model_prog_create(
     return prog;
 }
 
+// ---------------------------------------------------------------------------
+// Forward pass
+// ---------------------------------------------------------------------------
 
 void model_prog_compute(model_program* prog) {
     for (u32 i = 0; i < prog->size; i++) {
@@ -256,65 +263,80 @@ void model_prog_compute(model_program* prog) {
     }
 }
 
-void model_prog_compute_grads(model_program* prog) {
-    if(prog->size == 0) { return ;}
+// ---------------------------------------------------------------------------
+// Backward pass
+// ---------------------------------------------------------------------------
 
-    //1.start from zero. gradients accumulate
-    //so anything left over from the previous step would be added to the new gradient
-    for(u32 i=0; i<prog->size; i++){
+void model_prog_compute_grads(model_program* prog) {
+    if (prog->size == 0) { return; }
+
+    // 1. Start from zero. Gradients ACCUMULATE (a variable used twice receives two contributions),
+    //    so anything left over from the previous step would be added to the new gradient.
+    for (u32 i = 0; i < prog->size; i++) {
         model_var* v = prog->vars[i];
-        if(v->grad) { mat_clear(v->grad); }
+        if (v->grad) { mat_clear(v->grad); }
     }
 
-    //2.seed. the last variable of a program is the one it computes(post-order puts the root
-    //last). its gradient is 1 everywhere: we differentiate the sum of its elements
-    //averaging over a batch is the optimizer's job: scale the update by 1/batch)
-
-    model_var* root = prog->vars[prog->size-1];
-    MV_CHECK(root->grad != NULL);
+    // 2. Seed. The last variable of a program is the one it computes (post-order puts the root
+    //    last). Its gradient is 1 everywhere: we differentiate the SUM of its elements.
+    //    (Averaging over a batch is the optimizer's job: scale the update by 1 / batch.)
+    model_var* root = prog->vars[prog->size - 1];
+    MV_CHECK(root->grad != NULL);       // fails if nothing upstream is a PARAMETER / REQUIRES_GRAD
     mat_fill(root->grad, 1.0f);
 
-    //walk the program backwards, every consumer of a variable comes after it in the program.
-    //so by the time we reach a variable all contributions to its gradient have arrived and
-    //it is complete, then it passes its gradient on to its own inputs
-    for(u32 i = prog->size; i-- > 0; ){
+    // 3. Walk the program BACKWARDS. Every consumer of a variable comes after it in the program,
+    //    so by the time we reach a variable, all contributions to its gradient have arrived and
+    //    it is complete. Then it passes its gradient on to its own inputs.
+    for (u32 i = prog->size; i-- > 0; ) {
         model_var* v = prog->vars[i];
 
-        //a variable without gradient has no input that needs one either: requires grad
-        //propagates forward through every op, so there is nothing to pass on
-        if(v->grad == NULL){ continue; }
+        // A variable without a gradient has no input that needs one either: REQUIRES_GRAD
+        // propagates forward through every op, so there is nothing to pass on.
+        if (v->grad == NULL) { continue; }
 
         model_var* a = v->inputs[0];
         model_var* b = v->inputs[1];
 
-        switch(v->op) {
+        switch (v->op) {
             case MV_OP_NULL:
             case MV_OP_CREATE:
-                break;
+                break;                                  // a leaf: its gradient is the final answer
+
             case MV_OP_RELU:
-                if(a->grad) { MV_CHECK(mat_relu_add_grad(a->grad, a->val, v->grad)); }
+                if (a->grad) { MV_CHECK(mat_relu_add_grad(a->grad, a->val, v->grad)); }
                 break;
+
             case MV_OP_SOFTMAX:
-                if(a->grad) { MV_CHECK(mat_softmax_add_grad(a->grad, v->val, v->grad)); }
+                // The softmax gradient needs the softmax OUTPUT, which is v's own value.
+                if (a->grad) { MV_CHECK(mat_softmax_add_grad(a->grad, v->val, v->grad)); }
                 break;
+
             case MV_OP_ADD:
-                if(a->grad) { MV_CHECK(mat_add(a->grad, a->grad, v->grad)); }
-                if(b->grad) { MV_CHECK(mat_add(b->grad, b->grad, v->grad)); }
+                // d(a + b) = da + db: the gradient passes through unchanged to both inputs.
+                if (a->grad) { MV_CHECK(mat_add(a->grad, a->grad, v->grad)); }
+                if (b->grad) { MV_CHECK(mat_add(b->grad, b->grad, v->grad)); }
                 break;
+
             case MV_OP_SUB:
-                if(a->grad) { MV_CHECK(mat_add(a->grad, a->grad, v->grad)); }
-                if(b->grad) { MV_CHECK(mat_sub(b->grad, b->grad, v->grad)); }
+                // d(a - b) = da - db.
+                if (a->grad) { MV_CHECK(mat_add(a->grad, a->grad, v->grad)); }
+                if (b->grad) { MV_CHECK(mat_sub(b->grad, b->grad, v->grad)); }
                 break;
+
             case MV_OP_MATMUL:
-                if(a->grad) { MV_CHECK(mat_mul(a->grad, v->grad, b->val, false, false, true)); }
-                if(b->grad) { MV_CHECK(mat_mul(b->grad, a->val, v->grad, false, true, false)); }
+                // C = A * B:   dA += dC * B^T   and   dB += A^T * dC.
+                // zero_out = false: ACCUMULATE into the existing gradient.
+                if (a->grad) { MV_CHECK(mat_mul(a->grad, v->grad, b->val, false, false, true)); }
+                if (b->grad) { MV_CHECK(mat_mul(b->grad, a->val, v->grad, false, true, false)); }
                 break;
+
             case MV_OP_CROSS_ENTROPY:
-                if(a->grad || b->grad){
-                    MV_CHECK( mat_cross_entropy_add_grad(a->grad, b->grad, a->val, b->val, v->grad));
+                // Either gradient may be NULL (the labels need none).
+                if (a->grad || b->grad) {
+                    MV_CHECK(mat_cross_entropy_add_grad(a->grad, b->grad, a->val, b->val, v->grad));
                 }
                 break;
-            
+
             case _MV_OP_UNARY_START:
             case _MV_OP_BINARY_START:
             default:
@@ -322,6 +344,10 @@ void model_prog_compute_grads(model_program* prog) {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// The model
+// ---------------------------------------------------------------------------
 
 model_context* model_create(mem_arena* arena) {
     return PUSH_STRUCT(arena, model_context);          // zeroed
@@ -341,10 +367,142 @@ void model_feedforward(model_context* model) {
     model_prog_compute(&model->forward_prog);
 }
 
+void model_sgd_step(model_program* prog, f32 step) {
+    for (u32 i = 0; i < prog->size; i++) {
+        model_var* v = prog->vars[i];
+        if (!(v->flags & MV_FLAG_PARAMETER)) { continue; }   // only parameters are learned
+
+        MV_CHECK(v->grad != NULL);
+        u64 n = (u64)v->val->rows * v->val->cols;
+        for (u64 j = 0; j < n; j++) {
+            v->val->data[j] -= step * v->grad->data[j];
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Evaluation
+// ---------------------------------------------------------------------------
+
+static u32 row_argmax(const f32* row, u32 n) {
+    u32 best = 0;
+    for (u32 c = 1; c < n; c++) {
+        if (row[c] > row[best]) { best = c; }                // ties: the first maximum wins
+    }
+    return best;
+}
+
+f32 model_accuracy(model_context* model, const matrix* images, const matrix* labels) {
+    MV_CHECK(model->input && model->output && model->forward_prog.size > 0);
+    matrix* in  = model->input->val;
+    matrix* out = model->output->val;
+    MV_CHECK(images->cols == in->cols);
+    MV_CHECK(labels->cols == out->cols);
+    MV_CHECK(images->rows == labels->rows);
+
+    if (images->rows == 0) { return 0.0f; }
+
+    u32 batch = in->rows;
+    u64 correct = 0;
+
+    for (u32 start = 0; start < images->rows; start += batch) {
+        // The last batch may be partial: load only the rows that exist and count only those.
+        // (The remaining rows of the input keep old data, which is harmless: rows never mix.)
+        u32 count = MIN(batch, images->rows - start);
+        memcpy(in->data, images->data + (u64)start * in->cols, (u64)count * in->cols * sizeof(f32));
+
+        model_prog_compute(&model->forward_prog);
+
+        for (u32 r = 0; r < count; r++) {
+            u32 predicted = row_argmax(out->data + (u64)r * out->cols, out->cols);
+            u32 actual    = row_argmax(labels->data + (u64)(start + r) * labels->cols, labels->cols);
+            if (predicted == actual) { correct++; }
+        }
+    }
+    return (f32)((f64)correct / (f64)images->rows);
+}
+
+// ---------------------------------------------------------------------------
+// Training
+// ---------------------------------------------------------------------------
+
+// Fisher-Yates: walk from the end, swap each position with a random one at or before it. Every
+// one of the n! orderings is equally likely. (The tempting version, swapping each position with
+// a random position ANYWHERE, is subtly biased.)
+// `prng_rand() % k` is very slightly biased too, by about k / 2^32: negligible for a dataset size.
+static void shuffle_indices(u32* indices, u32 n) {
+    if (n < 2) { return; }
+    for (u32 i = n - 1; i > 0; i--) {
+        u32 j = prng_rand() % (i + 1);
+        u32 tmp = indices[i];
+        indices[i] = indices[j];
+        indices[j] = tmp;
+    }
+}
+
 void model_train(
     model_context* model,
-    const model_training_desc* training_desc
+    const model_training_desc* desc
 ) {
-    (void)model; (void)training_desc;
-    MV_NOT_IMPLEMENTED();
+    MV_CHECK(model->input && model->desired_output && model->output && model->cost);
+    MV_CHECK(model->cost_prog.size > 0 && model->forward_prog.size > 0);   // forgot model_compile()
+    MV_CHECK(desc->train_images && desc->train_labels);
+
+    matrix* in  = model->input->val;
+    matrix* lab = model->desired_output->val;
+    u32 batch = in->rows;
+
+    MV_CHECK(desc->batch_size == batch);                       // the graph's shapes are fixed
+    MV_CHECK(desc->train_images->cols == in->cols);
+    MV_CHECK(desc->train_labels->cols == lab->cols);
+    MV_CHECK(desc->train_images->rows == desc->train_labels->rows);
+    MV_CHECK(desc->train_images->rows >= batch);
+    if (desc->test_images) {
+        MV_CHECK(desc->test_labels);
+        MV_CHECK(desc->test_images->cols == in->cols && desc->test_labels->cols == lab->cols);
+        MV_CHECK(desc->test_images->rows == desc->test_labels->rows);
+    }
+
+    u32 n = desc->train_images->rows;
+    u32 num_batches = n / batch;
+    f32 step = desc->learning_rate / (f32)batch;
+
+    // The shuffled order of the samples lives in a scratch arena: no allocation of our own.
+    mem_arena_temp scratch = arena_scratch_get(NULL, 0);
+    MV_CHECK(scratch.arena != NULL);
+    u32* order = PUSH_ARRAY(scratch.arena, u32, n);
+    MV_CHECK(order != NULL);
+    for (u32 i = 0; i < n; i++) { order[i] = i; }
+
+    for (u32 epoch = 0; epoch < desc->epochs; epoch++) {
+        u64 start_ns = timer_ns();
+        shuffle_indices(order, n);
+
+        f64 loss_sum = 0.0;
+        for (u32 b = 0; b < num_batches; b++) {
+            // Gather this batch's samples (scattered across the dataset) into the graph's inputs.
+            for (u32 r = 0; r < batch; r++) {
+                u64 src = order[(u64)b * batch + r];
+                memcpy(in->data  + (u64)r * in->cols,  desc->train_images->data + src * in->cols,  in->cols  * sizeof(f32));
+                memcpy(lab->data + (u64)r * lab->cols, desc->train_labels->data + src * lab->cols, lab->cols * sizeof(f32));
+            }
+
+            model_prog_compute(&model->cost_prog);
+            loss_sum += (f64)mat_sum(model->cost->val) / (f64)batch;     // mean loss of this batch
+
+            model_prog_compute_grads(&model->cost_prog);
+            model_sgd_step(&model->cost_prog, step);
+        }
+
+        f64 seconds = (f64)(timer_ns() - start_ns) / 1e9;
+        printf("epoch %2u/%u  train loss %.4f", epoch + 1, desc->epochs, loss_sum / (f64)num_batches);
+        if (desc->test_images) {
+            f32 accuracy = model_accuracy(model, desc->test_images, desc->test_labels);
+            printf("  test accuracy %.2f%%", 100.0 * (f64)accuracy);
+        }
+        printf("  (%.1f s)\n", seconds);
+        fflush(stdout);
+    }
+
+    arena_scratch_release(scratch);
 }

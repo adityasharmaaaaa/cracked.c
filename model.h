@@ -180,6 +180,31 @@ void model_compile(mem_arena* arena, model_context* model);
 // Runs forward_prog. The caller puts data into model->input->val first.
 void model_feedforward(model_context* model);
 
+// Plain SGD update: for every PARAMETER in the program, value -= step * gradient.
+// The backward pass differentiates the SUM of the cost over the batch, so pass
+// step = learning_rate / batch_size to follow the gradient of the MEAN loss.
+void model_sgd_step(model_program* prog, f32 step);
+
+// Fraction (0..1) of the samples in `images` whose predicted class (the largest output of the
+// model's OUTPUT variable) equals the class of the matching row of `labels` (one-hot).
+// Evaluates ALL samples, in batches of the model's batch size: a final partial batch is handled
+// and only its real rows are counted. Needs model_compile() to have been called.
+f32 model_accuracy(model_context* model, const matrix* images, const matrix* labels);
+
+// Trains with mini-batch SGD:
+//   each epoch: shuffle the samples, then for each full batch
+//       copy the batch into the INPUT / DESIRED_OUTPUT variables, run the cost program (forward),
+//       run the backward pass, update the parameters with learning_rate / batch_size.
+//   after each epoch it prints the mean training loss and (if test data is given) the test accuracy.
+//
+// Requirements (checked; violating one aborts with a message):
+//   * model_compile() was called and the model has input, desired_output, output and cost;
+//   * training_desc->batch_size equals the number of rows the graph was built with, because the
+//     graph has fixed shapes;
+//   * the data matrices have as many columns as the input / desired_output variables.
+// The last (n % batch_size) samples of each shuffled epoch are skipped; being shuffled, they are a
+// different few every epoch. Initialize the parameters (mat_fill_he_uniform) BEFORE calling this,
+// and seed the PRNG for reproducible runs.
 void model_train(
     model_context* model,
     const model_training_desc* training_desc
