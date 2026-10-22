@@ -9,7 +9,7 @@
 //       true  = success
 //       false = failure, and the output matrix has NOT been modified.
 //     "Check the shapes, then do the work" -- never half-write an output.
-//   * Functions never allocate, except mat_create and mat_load, which take an arena.
+//   * Functions never allocate, except mat_create, which take an arena.
 //   * Read-only inputs are const. If a function writes to a parameter, it is not const.
 
 #pragma once
@@ -26,8 +26,7 @@ typedef struct {
 // arena is left exactly as it was (a half-built matrix is rolled back).
 matrix* mat_create(mem_arena* arena, u32 rows, u32 cols);
 
-// Allocates a matrix and fills it from a file. (File format is decided in a later week.)
-matrix* mat_load(mem_arena* arena, u32 rows, u32 cols, const char* filename);
+
 
 // dst = src. Shapes must match (same rows AND same cols: 2x3 is not 3x2).
 b32 mat_copy(matrix* dst, const matrix* src);
