@@ -1,0 +1,16 @@
+loaded 60000 training and 10000 test images
+before training: test accuracy 12.13%  (guessing would be 10%)
+training: 10 epochs, batch 64, learning rate 0.1
+
+epoch  1/10  train loss 0.3070  test accuracy 95.52%  (5.8 s)
+epoch  2/10  train loss 0.1369  test accuracy 96.60%  (6.4 s)
+epoch  3/10  train loss 0.0969  test accuracy 97.14%  (5.9 s)
+epoch  4/10  train loss 0.0735  test accuracy 97.38%  (5.5 s)
+epoch  5/10  train loss 0.0579  test accuracy 97.58%  (5.5 s)
+epoch  6/10  train loss 0.0467  test accuracy 97.83%  (5.5 s)
+epoch  7/10  train loss 0.0378  test accuracy 97.84%  (5.5 s)
+epoch  8/10  train loss 0.0311  test accuracy 97.34%  (5.5 s)
+epoch  9/10  train loss 0.0250  test accuracy 97.84%  (5.4 s)
+epoch 10/10  train loss 0.0201  test accuracy 97.94%  (5.8 s)
+
+final: train accuracy 99.69%, test accuracy 97.94%
