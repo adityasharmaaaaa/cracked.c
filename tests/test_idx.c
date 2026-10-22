@@ -262,6 +262,132 @@ static void test_load_labels(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// Everything that must be refused, and refused cleanly
+// ---------------------------------------------------------------------------
+static void test_load_failures(void) {
+    mem_arena* a = arena_create(MiB(4), MiB(1));
+    REQUIRE(a != NULL);
+    char path[64];
+    u64 pos_before = a->pos;
+
+    // A file that does not exist.
+    CHECK(idx_load_images(a, "/tmp/cracked_no_such_file.idx") == NULL);
+    CHECK(idx_load_labels(a, "/tmp/cracked_no_such_file.idx", 10) == NULL);
+
+    // The wrong KIND of file for the loader.
+    u8 labels[4] = { 1, 2, 3, 4 };
+    u64 label_size = make_label_file(g_buf, 4, labels, 4);
+    REQUIRE(write_temp(path, g_buf, label_size));
+    CHECK(idx_load_images(a, path) == NULL);              // a 1-D file is not an image file
+    unlink(path);
+
+    u64 image_size = make_image_file(g_buf, 3, 2, 2, NULL, 12);
+    REQUIRE(write_temp(path, g_buf, image_size));
+    CHECK(idx_load_labels(a, path, 10) == NULL);          // a 3-D file is not a label file
+    unlink(path);
+
+    // Truncated payload: the header promises 12 bytes, only 10 are there.
+    image_size = make_image_file(g_buf, 3, 2, 2, NULL, 10);
+    REQUIRE(write_temp(path, g_buf, image_size));
+    CHECK(idx_load_images(a, path) == NULL);
+    unlink(path);
+
+    // A stray trailing byte: also refused (the file is not what its header says).
+    image_size = make_image_file(g_buf, 3, 2, 2, NULL, 13);
+    REQUIRE(write_temp(path, g_buf, image_size));
+    CHECK(idx_load_images(a, path) == NULL);
+    unlink(path);
+
+    // Zero items.
+    image_size = make_image_file(g_buf, 0, 2, 2, NULL, 0);
+    REQUIRE(write_temp(path, g_buf, image_size));
+    CHECK(idx_load_images(a, path) == NULL);
+    unlink(path);
+
+    // Corrupt magic number.
+    image_size = make_image_file(g_buf, 3, 2, 2, NULL, 12);
+    g_buf[2] = 0x0D;
+    REQUIRE(write_temp(path, g_buf, image_size));
+    CHECK(idx_load_images(a, path) == NULL);
+    unlink(path);
+
+    // A label outside 0..num_classes-1 (the LAST label, so the loader has already done real work
+    // and allocated when it finds out).
+    u8 bad_labels[4] = { 1, 2, 3, 10 };
+    label_size = make_label_file(g_buf, 4, bad_labels, 4);
+    REQUIRE(write_temp(path, g_buf, label_size));
+    CHECK(idx_load_labels(a, path, 10) == NULL);
+    CHECK(idx_load_labels(a, path, 11) != NULL);          // same file is fine with 11 classes
+    unlink(path);
+
+    u8 ok_labels[4] = { 1, 2, 3, 4 };
+    label_size = make_label_file(g_buf, 4, ok_labels, 4);
+    REQUIRE(write_temp(path, g_buf, label_size));
+    CHECK(idx_load_labels(a, path, 0) == NULL);           // zero classes makes no sense
+    unlink(path);
+
+    // After all those failures (plus one deliberate success above), the arena holds nothing from
+    // the FAILED loads. Measure by repeating the failures and checking the position is unchanged.
+    u64 pos_mid = a->pos;
+    label_size = make_label_file(g_buf, 4, bad_labels, 4);
+    REQUIRE(write_temp(path, g_buf, label_size));
+    CHECK(idx_load_labels(a, path, 10) == NULL);
+    unlink(path);
+    CHECK(a->pos == pos_mid);
+
+    (void)pos_before;
+    arena_destroy(a);
+
+    // A matrix too big for the arena: the file is perfectly valid, the arena is just too small.
+    // The loader must fail AND hand back whatever it had allocated.
+    mem_arena* tiny = arena_create(plat_get_pagesize(), plat_get_pagesize());
+    REQUIRE(tiny != NULL);
+    image_size = make_image_file(g_buf, 100, 100, 100, NULL, 1000000);   // 4 MB of floats
+    REQUIRE(write_temp(path, g_buf, image_size));
+    u64 tiny_before = tiny->pos;
+    CHECK(idx_load_images(tiny, path) == NULL);
+    CHECK(tiny->pos == tiny_before);
+    unlink(path);
+    arena_destroy(tiny);
+}
+
+// Every path must close the file. If one forgets, the process runs out of file handles (about 256
+// on macOS, 1024 on Linux) and perfectly good files then fail to open.
+static void test_no_handle_leaks(void) {
+    mem_arena* a = arena_create(MiB(4), MiB(1));
+    REQUIRE(a != NULL);
+    char bad_path[64], good_path[64];
+
+    u64 size = make_image_file(g_buf, 3, 2, 2, NULL, 10);                 // truncated: fails late
+    REQUIRE(write_temp(bad_path, g_buf, size));
+
+    for (u32 i = 0; i < 3000; i++) {
+        matrix* m = idx_load_images(a, bad_path);
+        if (m != NULL) { CHECK(m == NULL); break; }
+    }
+
+    size = make_image_file(g_buf, 3, 2, 2, NULL, 12);
+    REQUIRE(write_temp(good_path, g_buf, size));
+    CHECK(idx_load_images(a, good_path) != NULL);          // still able to open files
+
+    u8 bad_labels[2] = { 5, 200 };                         // fails on the second label
+    size = make_label_file(g_buf, 2, bad_labels, 2);
+    unlink(bad_path);
+    REQUIRE(write_temp(bad_path, g_buf, size));
+    for (u32 i = 0; i < 3000; i++) {
+        if (idx_load_labels(a, bad_path, 10) != NULL) { CHECK(false); break; }
+    }
+    CHECK(idx_load_images(a, good_path) != NULL);
+
+    unlink(bad_path);
+    unlink(good_path);
+    arena_destroy(a);
+}
+
+
+
+// ---------------------------------------------------------------------------
 
 int main(void) {
     RUN_TEST(test_be32);
@@ -269,6 +395,8 @@ int main(void) {
     RUN_TEST(test_load_images);
     RUN_TEST(test_load_images_byte_order);
     RUN_TEST(test_load_labels);
+    RUN_TEST(test_load_failures);
+    RUN_TEST(test_no_handle_leaks);
 
     return test_summary();
 }
