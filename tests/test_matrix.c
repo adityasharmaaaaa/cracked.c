@@ -1138,6 +1138,55 @@ static void test_softmax_cross_entropy_chain(void) {
 }
 
 // ---------------------------------------------------------------------------
+// mat_fill_he_uniform
+// ---------------------------------------------------------------------------
+static void test_he_init(void) {
+    mem_arena* a = arena_create(MiB(16), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+
+    // A realistic first layer: 784 inputs, 256 outputs. Weights are (inputs x outputs).
+    prng_seed(3, 3);
+    matrix* w = mat_create(a, 784, 256);
+    mat_fill_he_uniform(w);
+
+    f32 limit = sqrtf(6.0f / 784.0f);
+    u64 n = (u64)784 * 256;
+    f64 sum = 0.0, sumsq = 0.0;
+    f32 largest = 0.0f;
+    b32 in_bounds = true;
+    for (u64 i = 0; i < n; i++) {
+        f32 v = w->data[i];
+        if (v < -limit || v > limit) { in_bounds = false; }
+        if (fabsf(v) > largest) { largest = fabsf(v); }
+        sum += v;
+        sumsq += (f64)v * v;
+    }
+    f64 mean = sum / (f64)n;
+    f64 variance = sumsq / (f64)n - mean * mean;
+
+    CHECK(in_bounds);
+    CHECK_NEAR(mean, 0.0, 6e-4);                          // centred on zero
+    CHECK_NEAR(variance, 2.0 / 784.0, 2.0 / 784.0 * 0.02);   // He: variance = 2 / fan_in, within 2%
+    CHECK(largest > 0.99f * limit);                       // and it really uses the whole range
+
+    // fan_in is the number of ROWS (inputs), not columns: the same element count gives
+    // very different ranges depending on the shape.
+    matrix* tall = mat_create(a, 100, 1000);              // 100 inputs
+    matrix* wide = mat_create(a, 1000, 100);              // 1000 inputs
+    mat_fill_he_uniform(tall);
+    mat_fill_he_uniform(wide);
+    f32 max_tall = 0.0f, max_wide = 0.0f;
+    for (u32 i = 0; i < 100000; i++) {
+        if (fabsf(tall->data[i]) > max_tall) { max_tall = fabsf(tall->data[i]); }
+        if (fabsf(wide->data[i]) > max_wide) { max_wide = fabsf(wide->data[i]); }
+    }
+    CHECK(max_tall <= sqrtf(6.0f / 100.0f)  && max_tall > 0.95f * sqrtf(6.0f / 100.0f));
+    CHECK(max_wide <= sqrtf(6.0f / 1000.0f) && max_wide > 0.95f * sqrtf(6.0f / 1000.0f));
+
+    arena_destroy(a);
+}
+
+// ---------------------------------------------------------------------------
 
 int main(void) {
     RUN_TEST(test_create);
@@ -1148,6 +1197,7 @@ int main(void) {
     RUN_TEST(test_copy);
     RUN_TEST(test_add_sub);
     RUN_TEST(test_fill_rand);
+    RUN_TEST(test_he_init);
     RUN_TEST(test_matmul_known);
     RUN_TEST(test_matmul_vs_reference);
     RUN_TEST(test_matmul_zero_out);

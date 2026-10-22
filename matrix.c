@@ -88,6 +88,11 @@ void mat_fill_rand(matrix* mat, f32 lower, f32 upper) {
     }
 }
 
+void mat_fill_he_uniform(matrix* mat) {
+    f32 limit = sqrtf(6.0f / (f32)mat->rows);
+    mat_fill_rand(mat, -limit, limit);
+}
+
 void mat_scale(matrix* mat, f32 scale) {
     u64 n = mat_count(mat);
     for (u64 i = 0; i < n; i++) {

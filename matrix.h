@@ -35,6 +35,7 @@ void mat_clear(matrix* mat);                              // all elements = 0
 void mat_fill(matrix* mat, f32 x);                        // all elements = x
 void mat_fill_rand(matrix* mat, f32 lower, f32 upper);    // uniform in [lower, upper]; needs lower <= upper
                                                           // (upper is reachable only via f32 rounding of lower + r*range)
+void mat_fill_he_uniform(matrix* mat);                                                     
 void mat_scale(matrix* mat, f32 scale);                   // mat *= scale
 f32  mat_sum(const matrix* mat);                          // sum of all elements (accumulated in f64)
 u64  mat_argmax(const matrix* mat);                       // flat index of the largest element; ties -> first
