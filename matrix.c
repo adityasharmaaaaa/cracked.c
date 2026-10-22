@@ -54,10 +54,7 @@ matrix* mat_create(mem_arena* arena, u32 rows, u32 cols) {
     return mat;
 }
 
-matrix* mat_load(mem_arena* arena, u32 rows, u32 cols, const char* filename) {
-    (void)arena; (void)rows; (void)cols; (void)filename;
-    return NULL;
-}
+
 
 // ---------------------------------------------------------------------------
 // Basic operations

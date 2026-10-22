@@ -4,9 +4,11 @@
 #include "arena.h"
 #include "prng.h"
 #include "matrix.h"
+#include "idx.h"
 #include "model.h"
 
 #include "arena.c"
 #include "prng.c"
 #include "matrix.c"
+#include "idx.c"
 #include "model.c"
