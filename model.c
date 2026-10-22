@@ -1,5 +1,5 @@
 #include <stdlib.h>
-
+#include "timer.h"
 // Internal-error check. The constructors validate every shape up front, so if a mat_* call
 // still fails while running a program, that is a bug in this file, not bad user input.
 // Stop loudly instead of silently producing garbage.
@@ -339,6 +339,19 @@ void model_compile(mem_arena* arena, model_context* model) {
 void model_feedforward(model_context* model) {
     MV_CHECK(model->forward_prog.size > 0);            // forgot model_compile(), or no output set
     model_prog_compute(&model->forward_prog);
+}
+
+void model_sgd_step(model_program* prog, f32 step) {
+    for (u32 i = 0; i < prog->size; i++) {
+        model_var* v = prog->vars[i];
+        if (!(v->flags & MV_FLAG_PARAMETER)) { continue; }   // only parameters are learned
+ 
+        MV_CHECK(v->grad != NULL);
+        u64 n = (u64)v->val->rows * v->val->cols;
+        for (u64 j = 0; j < n; j++) {
+            v->val->data[j] -= step * v->grad->data[j];
+        }
+    }
 }
 
 void model_train(

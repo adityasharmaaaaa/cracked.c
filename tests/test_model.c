@@ -878,21 +878,6 @@ static void test_backward_cross_entropy_both(void) {
     arena_destroy(a);
 }
 
-// Plain SGD: for every parameter, w -= step * grad. `step` is learning_rate / batch_size: the
-// backward pass differentiates the SUM of the cost, so dividing by the batch size turns it into
-// the gradient of the MEAN loss, and the learning rate no longer depends on the batch size.
-static void sgd_step(model_program* prog, f32 step) {
-    for (u32 i = 0; i < prog->size; i++) {
-        model_var* v = prog->vars[i];
-        if (!(v->flags & MV_FLAG_PARAMETER)) { continue; }
-
-        u64 n = (u64)v->val->rows * v->val->cols;
-        for (u64 j = 0; j < n; j++) {
-            v->val->data[j] -= step * v->grad->data[j];
-        }
-    }
-}
-
 // The classic end-to-end sanity check: a correct network must be able to memorise 8 samples.
 // If forward, backward, or the update were wrong anywhere, the loss would not go to ~0.
 static void test_overfit_tiny_batch(void) {
@@ -918,7 +903,7 @@ static void test_overfit_tiny_batch(void) {
         loss_at[step] = mat_sum(g.cost->val) / (f32)batch;             // mean loss over the batch
 
         model_prog_compute_grads(&g.m->cost_prog);
-        sgd_step(&g.m->cost_prog, 0.3f / (f32)batch);
+        model_sgd_step(&g.m->cost_prog, 0.3f / (f32)batch);
     }
 
     // An untrained network knows nothing: loss ~ ln(number of classes) = ln 3 = 1.0986.
@@ -948,6 +933,269 @@ static void test_overfit_tiny_batch(void) {
 }
 
 // ---------------------------------------------------------------------------
+// model_sgd_step
+// ---------------------------------------------------------------------------
+static void test_sgd_step(void) {
+    mem_arena* a = arena_create(MiB(4), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+
+    // w is a PARAMETER; r needs a gradient too but is NOT a parameter, so it must not be updated.
+    model_context* m = model_create(a);
+    model_var* w = mv_create(a, m, 1, 3, MV_FLAG_PARAMETER);
+    model_var* r = mv_create(a, m, 1, 3, MV_FLAG_REQUIRES_GRAD);
+    model_var* c = mv_add(a, m, w, r, MV_FLAG_COST);
+    REQUIRE(w && r && c);
+    f32 wv[] = { 1, 2, 3 };
+    f32 rv[] = { 10, 20, 30 };
+    fill_from(w->val, wv, 3);
+    fill_from(r->val, rv, 3);
+    model_compile(a, m);
+    model_prog_compute(&m->cost_prog);
+    model_prog_compute_grads(&m->cost_prog);                  // d(sum)/dw = d(sum)/dr = 1
+
+    model_sgd_step(&m->cost_prog, 0.5f);
+    CHECK(w->val->data[0] == 0.5f && w->val->data[1] == 1.5f && w->val->data[2] == 2.5f);
+    CHECK(r->val->data[0] == 10.0f && r->val->data[2] == 30.0f);   // not a parameter: untouched
+
+    model_sgd_step(&m->cost_prog, 0.0f);                      // zero step changes nothing
+    CHECK(w->val->data[0] == 0.5f);
+
+    model_sgd_step(&m->cost_prog, -1.0f);                     // negative step walks the other way
+    CHECK(w->val->data[0] == 1.5f);
+
+    arena_destroy(a);
+}
+
+// ---------------------------------------------------------------------------
+// shuffle_indices
+// ---------------------------------------------------------------------------
+static void test_shuffle_indices(void) {
+    u32 idx[10];
+    for (u32 i = 0; i < 10; i++) { idx[i] = i; }
+
+    prng_seed(1, 1);
+    shuffle_indices(idx, 10);
+
+    // Still a permutation: every index exactly once.
+    u32 seen[10] = { 0 };
+    for (u32 i = 0; i < 10; i++) { REQUIRE(idx[i] < 10); seen[idx[i]]++; }
+    b32 each_once = true;
+    for (u32 i = 0; i < 10; i++) { if (seen[i] != 1) { each_once = false; } }
+    CHECK(each_once);
+
+    // It actually moved things.
+    b32 identity = true;
+    for (u32 i = 0; i < 10; i++) { if (idx[i] != i) { identity = false; } }
+    CHECK(!identity);
+
+    // Same seed, same shuffle (reproducible experiments); another seed, another shuffle.
+    u32 again[10], other[10];
+    for (u32 i = 0; i < 10; i++) { again[i] = i; other[i] = i; }
+    prng_seed(1, 1);
+    shuffle_indices(again, 10);
+    prng_seed(2, 1);
+    shuffle_indices(other, 10);
+    CHECK(memcmp(idx, again, sizeof(idx)) == 0);
+    CHECK(memcmp(idx, other, sizeof(idx)) != 0);
+
+    // Degenerate sizes do not crash or change anything.
+    u32 one[1] = { 7 };
+    shuffle_indices(one, 1);
+    CHECK(one[0] == 7);
+    shuffle_indices(one, 0);
+    CHECK(one[0] == 7);
+
+    // UNIFORMITY. A correct shuffle makes every ordering equally likely. For 3 items there are 6
+    // orderings, each should appear 1/6 = 16.7% of the time. (The tempting "swap every position with a
+    // random position anywhere" version is biased: it produces 4/27 = 14.8% and 5/27 = 18.5%.)
+    u32 counts[27] = { 0 };
+    u32 trials = 60000;
+    prng_seed(5, 5);
+    for (u32 t = 0; t < trials; t++) {
+        u32 p[3] = { 0, 1, 2 };
+        shuffle_indices(p, 3);
+        counts[p[0] * 9 + p[1] * 3 + p[2]]++;
+    }
+    u32 distinct = 0;
+    b32 uniform = true;
+    for (u32 k = 0; k < 27; k++) {
+        if (counts[k] == 0) { continue; }
+        distinct++;
+        f64 share = (f64)counts[k] / (f64)trials;
+        if (fabs(share - 1.0 / 6.0) > 0.008) { uniform = false; }
+    }
+    CHECK(distinct == 6);
+    CHECK(uniform);
+}
+
+// ---------------------------------------------------------------------------
+// model_accuracy
+// ---------------------------------------------------------------------------
+static void test_accuracy(void) {
+    mem_arena* a = arena_create(MiB(4), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+
+    // A model whose answer is KNOWN: y = softmax(x * 10 * I). For a one-hot input the largest output
+    // is the same class, so it "predicts" its input. Batch size 4, so 10 samples = 4 + 4 + a partial 2.
+    model_context* m = model_create(a);
+    model_var* x = mv_create(a, m, 4, 3, MV_FLAG_INPUT);
+    model_var* w = mv_create(a, m, 3, 3, MV_FLAG_PARAMETER);
+    model_var* y = mv_softmax(a, m, mv_matmul(a, m, x, w, MV_FLAG_NONE), MV_FLAG_OUTPUT);
+    REQUIRE(x && w && y);
+    for (u32 i = 0; i < 3; i++) { w->val->data[i * 3 + i] = 10.0f; }
+    model_compile(a, m);
+
+    u32 n = 10;
+    matrix* images = mat_create(a, n, 3);
+    matrix* labels = mat_create(a, n, 3);
+    for (u32 i = 0; i < n; i++) {
+        images->data[i * 3 + i % 3] = 1.0f;
+        labels->data[i * 3 + i % 3] = 1.0f;
+    }
+
+    // Every prediction right: exactly 1.0. (Dropping the partial batch would give 0.8; counting the
+    // 2 stale rows of the last batch as real would give more than 1.)
+    CHECK_NEAR(model_accuracy(m, images, labels), 1.0, 1e-6);
+
+    // Make samples 0, 4 and 9 wrong, one in each batch (the last one in the PARTIAL batch): 7/10.
+    for (u32 bad = 0; bad < 3; bad++) {
+        u32 i = bad == 0 ? 0 : (bad == 1 ? 4 : 9);
+        for (u32 c = 0; c < 3; c++) { labels->data[i * 3 + c] = 0.0f; }
+        labels->data[i * 3 + (i % 3 + 1) % 3] = 1.0f;
+    }
+    CHECK_NEAR(model_accuracy(m, images, labels), 0.7, 1e-6);
+
+    // Fewer samples than one batch, and an exact multiple of the batch size.
+    matrix* one_image = mat_create(a, 1, 3);
+    matrix* one_label = mat_create(a, 1, 3);
+    one_image->data[2] = 1.0f;
+    one_label->data[2] = 1.0f;
+    CHECK_NEAR(model_accuracy(m, one_image, one_label), 1.0, 1e-6);
+    one_label->data[2] = 0.0f;
+    one_label->data[0] = 1.0f;
+    CHECK_NEAR(model_accuracy(m, one_image, one_label), 0.0, 1e-6);
+
+    // Ties: when two outputs are exactly equal, the FIRST class is the prediction. With all-zero
+    // weights every output is 1/3, so the model "predicts" class 0 for everything.
+    f32 saved_weights[9];
+    memcpy(saved_weights, w->val->data, sizeof(saved_weights));
+    mat_clear(w->val);
+    matrix* tie_labels_0 = mat_create(a, 3, 3);
+    matrix* tie_labels_2 = mat_create(a, 3, 3);
+    for (u32 i = 0; i < 3; i++) { tie_labels_0->data[i * 3 + 0] = 1.0f; tie_labels_2->data[i * 3 + 2] = 1.0f; }
+    matrix* tie_images = mat_create(a, 3, 3);
+    mat_fill(tie_images, 1.0f);
+    CHECK_NEAR(model_accuracy(m, tie_images, tie_labels_0), 1.0, 1e-6);
+    CHECK_NEAR(model_accuracy(m, tie_images, tie_labels_2), 0.0, 1e-6);
+    memcpy(w->val->data, saved_weights, sizeof(saved_weights));
+
+    matrix* eight_images = mat_create(a, 8, 3);
+    matrix* eight_labels = mat_create(a, 8, 3);
+    memcpy(eight_images->data, images->data, 8 * 3 * sizeof(f32));
+    for (u32 i = 0; i < 8; i++) { eight_labels->data[i * 3 + i % 3] = 1.0f; }
+    CHECK_NEAR(model_accuracy(m, eight_images, eight_labels), 1.0, 1e-6);
+
+    arena_destroy(a);
+}
+
+// ---------------------------------------------------------------------------
+// model_train on a small, learnable problem
+// ---------------------------------------------------------------------------
+static void test_train(void) {
+    mem_arena* a = arena_create(MiB(16), MiB(1));
+    if (!a) { CHECK(a != NULL); return; }
+
+    // The task: 3 classes, 8 features, class = which of 3 fixed random directions the sample points
+    // along most. Linearly separable, so a small network must learn it.
+    u32 in = 8, classes = 3, n_train = 1000, n_test = 400, total = 3000;
+    prng_seed(99, 9);
+    matrix* direction = mat_create(a, in, classes);
+    mat_fill_rand(direction, -1.0f, 1.0f);
+    matrix* raw = mat_create(a, total, in);
+    mat_fill_rand(raw, -1.0f, 1.0f);
+    matrix* scores = mat_create(a, total, classes);
+    REQUIRE(mat_mul(scores, raw, direction, true, false, false));
+
+    u32* klass = PUSH_ARRAY(a, u32, total);
+    for (u32 i = 0; i < total; i++) {
+        klass[i] = row_argmax(scores->data + (u64)i * classes, classes);
+    }
+
+    // The TRAINING set is sorted by class: all of class 0, then class 1, then class 2. Without
+    // shuffling, consecutive batches contain a single class and the network keeps forgetting the
+    // others; with shuffling it learns all three. The test set is in random order.
+    matrix* train_x = mat_create(a, n_train, in);
+    matrix* train_y = mat_create(a, n_train, classes);
+    u32 filled = 0;
+    for (u32 c = 0; c < classes && filled < n_train; c++) {
+        for (u32 i = 0; i < n_train + n_test && filled < n_train; i++) {
+            if (klass[i] != c) { continue; }
+            memcpy(train_x->data + (u64)filled * in, raw->data + (u64)i * in, in * sizeof(f32));
+            train_y->data[(u64)filled * classes + c] = 1.0f;
+            filled++;
+        }
+    }
+    REQUIRE(filled == n_train);
+
+    // The first n_train raw samples were consumed class by class; the test set uses fresh ones.
+    matrix* test_x = mat_create(a, n_test, in);
+    matrix* test_y = mat_create(a, n_test, classes);
+    for (u32 i = 0; i < n_test; i++) {
+        u32 src = n_train + n_test + i;                    // never overlaps what the training loop scanned
+        memcpy(test_x->data + (u64)i * in, raw->data + (u64)src * in, in * sizeof(f32));
+        test_y->data[(u64)i * classes + klass[src]] = 1.0f;
+    }
+
+    u32 batch = 32;                                        // 1000 / 32: the last 8 samples are skipped
+    model_context* m = model_create(a);
+    model_var* x  = mv_create(a, m, batch, in, MV_FLAG_INPUT);
+    model_var* w1 = mv_create(a, m, in, 16, MV_FLAG_PARAMETER);
+    model_var* w2 = mv_create(a, m, 16, classes, MV_FLAG_PARAMETER);
+    model_var* h  = mv_relu(a, m, mv_matmul(a, m, x, w1, MV_FLAG_NONE), MV_FLAG_NONE);
+    model_var* y  = mv_softmax(a, m, mv_matmul(a, m, h, w2, MV_FLAG_NONE), MV_FLAG_OUTPUT);
+    model_var* lb = mv_create(a, m, batch, classes, MV_FLAG_DESIRED_OUTPUT);
+    model_var* cs = mv_cross_entropy(a, m, lb, y, MV_FLAG_COST);
+    REQUIRE(x && w1 && w2 && h && y && lb && cs);
+    model_compile(a, m);
+    mat_fill_he_uniform(w1->val);
+    mat_fill_he_uniform(w2->val);
+
+    model_training_desc desc = {
+        .train_images = train_x, .train_labels = train_y,
+        .test_images = test_x, .test_labels = test_y,
+        .epochs = 0, .batch_size = batch, .learning_rate = 0.5f,
+    };
+
+    // Zero epochs: nothing is trained, the weights are untouched.
+    matrix* w1_before = mat_create(a, in, 16);
+    mat_copy(w1_before, w1->val);
+    model_train(m, &desc);
+    CHECK(memcmp(w1_before->data, w1->val->data, in * 16 * sizeof(f32)) == 0);
+
+    f32 before = model_accuracy(m, test_x, test_y);
+    printf("    synthetic task: test accuracy before training %.1f%%\n", 100.0 * (f64)before);
+    CHECK(before < 0.8f);                                  // an untrained network has not solved it
+
+    // The training data is sorted by class, so WITHOUT shuffling each epoch ends with a run of
+    // class-2-only batches that drag the network toward class 2. A network that has no shuffling
+    // catches up eventually (about 94% by epoch 8 either way) but is much worse EARLY: measured
+    // 71% unshuffled vs 89% shuffled after 2 epochs. So check early.
+    desc.epochs = 2;
+    model_train(m, &desc);
+    f32 early = model_accuracy(m, test_x, test_y);
+    printf("    synthetic task: test accuracy after 2 epochs  %.1f%%\n", 100.0 * (f64)early);
+    CHECK(early > 0.80f);
+
+    desc.epochs = 6;
+    model_train(m, &desc);
+    f32 after = model_accuracy(m, test_x, test_y);
+    printf("    synthetic task: test accuracy after 8 epochs  %.1f%%\n", 100.0 * (f64)after);
+    CHECK(after > 0.90f);
+
+    arena_destroy(a);
+}
+
+// ---------------------------------------------------------------------------
 
 int main(void) {
     RUN_TEST(test_mv_create);
@@ -966,6 +1214,10 @@ int main(void) {
     RUN_TEST(test_backward_finite_differences);
     RUN_TEST(test_backward_cross_entropy_both);
     RUN_TEST(test_overfit_tiny_batch);
+    RUN_TEST(test_sgd_step);
+    RUN_TEST(test_shuffle_indices);
+    RUN_TEST(test_accuracy);
+    RUN_TEST(test_train);
 
     return test_summary();
 }
