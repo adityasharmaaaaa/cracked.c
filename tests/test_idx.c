@@ -385,7 +385,65 @@ static void test_no_handle_leaks(void) {
     arena_destroy(a);
 }
 
+// ---------------------------------------------------------------------------
+// The real thing (skipped if the files are not there)
+// ---------------------------------------------------------------------------
+static void test_real_mnist(void) {
+    const char* train_images = "data/mnist/train-images-idx3-ubyte";
+    const char* train_labels = "data/mnist/train-labels-idx1-ubyte";
+    const char* test_images  = "data/mnist/t10k-images-idx3-ubyte";
+    const char* test_labels  = "data/mnist/t10k-labels-idx1-ubyte";
 
+    FILE* probe = fopen(train_images, "rb");
+    if (probe == NULL) {
+        printf("    SKIPPED: put the four MNIST files in data/mnist/ to run this test\n");
+        return;
+    }
+    fclose(probe);
+
+    mem_arena* a = arena_create(GiB(1), MiB(64));
+    REQUIRE(a != NULL);
+
+    matrix* xtr = idx_load_images(a, train_images);
+    matrix* ytr = idx_load_labels(a, train_labels, 10);
+    matrix* xte = idx_load_images(a, test_images);
+    matrix* yte = idx_load_labels(a, test_labels, 10);
+    REQUIRE(xtr && ytr && xte && yte);
+
+    CHECK(xtr->rows == 60000 && xtr->cols == 784);
+    CHECK(ytr->rows == 60000 && ytr->cols == 10);
+    CHECK(xte->rows == 10000 && xte->cols == 784);
+    CHECK(yte->rows == 10000 && yte->cols == 10);
+
+    // The first ten training labels of MNIST are 5 0 4 1 9 2 1 3 1 4.
+    u32 expected_first[10] = { 5, 0, 4, 1, 9, 2, 1, 3, 1, 4 };
+    for (u32 r = 0; r < 10; r++) { CHECK(ytr->data[r * 10 + expected_first[r]] == 1.0f); }
+
+    // Class counts of the training set (known from the dataset's documentation).
+    u32 expected_counts[10] = { 5923, 6742, 5958, 6131, 5842, 5421, 5918, 6265, 5851, 5949 };
+    u32 counts[10] = { 0 };
+    for (u32 r = 0; r < 60000; r++) {
+        for (u32 c = 0; c < 10; c++) { if (ytr->data[(u64)r * 10 + c] == 1.0f) { counts[c]++; } }
+    }
+    for (u32 c = 0; c < 10; c++) { CHECK(counts[c] == expected_counts[c]); }
+
+    // Pixels are in [0, 1], the data is not blank, and a typical MNIST image is mostly background
+    // (mean pixel value about 0.13 across the training set).
+    f64 sum = 0.0;
+    f32 lo = 1.0f, hi = 0.0f;
+    u64 n = (u64)60000 * 784;
+    for (u64 i = 0; i < n; i++) {
+        f32 v = xtr->data[i];
+        sum += v;
+        if (v < lo) { lo = v; }
+        if (v > hi) { hi = v; }
+    }
+    printf("    MNIST train: %u images, pixel min %.1f max %.1f mean %.4f\n", xtr->rows, lo, hi, sum / (f64)n);
+    CHECK(lo == 0.0f && hi == 1.0f);
+    CHECK_NEAR(sum / (f64)n, 0.1307, 0.001);              // the well-known MNIST mean
+
+    arena_destroy(a);
+}
 
 // ---------------------------------------------------------------------------
 
@@ -397,6 +455,7 @@ int main(void) {
     RUN_TEST(test_load_labels);
     RUN_TEST(test_load_failures);
     RUN_TEST(test_no_handle_leaks);
+    RUN_TEST(test_real_mnist);
 
     return test_summary();
 }
